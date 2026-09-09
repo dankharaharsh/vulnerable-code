@@ -1,0 +1,114 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard{% endblock %}
+{% block header_title %}Operations Dashboard{% endblock %}
+
+{% block header_actions %}
+<a href="{{ url_for('upload_view') }}" class="btn btn-primary btn-sm">+ Upload Asset</a>
+{% endblock %}
+
+{% block content %}
+<div class="card" style="background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%); color: white; border: none; margin-bottom: 28px;">
+    <div class="card-body" style="padding: 32px;">
+        <h1 style="font-size: 24px; font-weight: 700; margin-bottom: 8px;">Welcome back, {{ current_user['display_name'] or current_user['username'] }}!</h1>
+        <p style="color: #94a3b8; font-size: 14px; max-width: 600px;">
+            SecureHub Operations Center is running in local training mode. Access security metrics, team logs, managed file repositories, and user authorization controls below.
+        </p>
+    </div>
+</div>
+
+<!-- Key Metrics Grid -->
+<div class="metrics-grid">
+    <div class="metric-card">
+        <div class="metric-header">
+            <span class="metric-title">Active Users</span>
+            <span class="metric-icon">👥</span>
+        </div>
+        <div class="metric-value">{{ stats.total_users }}</div>
+        <div class="metric-caption">Seeded corporate accounts</div>
+    </div>
+
+    <div class="metric-card">
+        <div class="metric-header">
+            <span class="metric-title">Managed Assets</span>
+            <span class="metric-icon">📁</span>
+        </div>
+        <div class="metric-value">{{ stats.total_files }}</div>
+        <div class="metric-caption">Files in local storage</div>
+    </div>
+
+    <div class="metric-card">
+        <div class="metric-header">
+            <span class="metric-title">Operations Log</span>
+            <span class="metric-icon">💬</span>
+        </div>
+        <div class="metric-value">{{ stats.total_comments }}</div>
+        <div class="metric-caption">Recorded log entries</div>
+    </div>
+
+    <div class="metric-card">
+        <div class="metric-header">
+            <span class="metric-title">2FA Protection</span>
+            <span class="metric-icon">🔐</span>
+        </div>
+        <div class="metric-value" style="font-size: 20px; line-height: 32px;">
+            {% if current_user['two_factor_enabled'] %}
+                <span class="badge badge-success">Enforced</span>
+            {% else %}
+                <span class="badge badge-warning">Optional</span>
+            {% endif %}
+        </div>
+        <div class="metric-caption">Multi-factor state</div>
+    </div>
+</div>
+
+<div style="display: grid; grid-template-columns: 2fr 1fr; gap: 24px;">
+    <!-- Recent Activity Log -->
+    <div class="card">
+        <div class="card-header">
+            <h3>Recent Operations Log</h3>
+            <a href="{{ url_for('comments_view') }}" class="btn btn-secondary btn-sm">View All</a>
+        </div>
+        <div class="card-body">
+            {% if recent_comments %}
+                {% for comment in recent_comments %}
+                <div class="comment-item">
+                    <div class="comment-header">
+                        <span class="comment-author">{{ comment.username }}</span>
+                        <span class="comment-time">{{ comment.created_at }}</span>
+                    </div>
+                    <!-- Safely rendered comment body (no XSS) -->
+                    <div class="comment-content">{{ comment.comment_text }}</div>
+                </div>
+                {% endfor %}
+            {% else %}
+                <p style="color: var(--text-muted); font-size: 14px;">No recent comments posted yet.</p>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- Quick Navigation Actions -->
+    <div class="card">
+        <div class="card-header">
+            <h3>Quick Actions</h3>
+        </div>
+        <div class="card-body" style="display: flex; flex-direction: column; gap: 10px;">
+            <a href="{{ url_for('profile_view') }}" class="btn btn-secondary" style="justify-content: flex-start;">
+                <span>👤</span> My Profile Details
+            </a>
+            <a href="{{ url_for('users_list') }}" class="btn btn-secondary" style="justify-content: flex-start;">
+                <span>👥</span> Team Member Directory
+            </a>
+            <a href="{{ url_for('two_factor_view') }}" class="btn btn-secondary" style="justify-content: flex-start;">
+                <span>🔐</span> Multi-Factor Authentication
+            </a>
+            <a href="{{ url_for('upload_view') }}" class="btn btn-secondary" style="justify-content: flex-start;">
+                <span>📤</span> Upload File Asset
+            </a>
+            <a href="{{ url_for('uploads_gallery') }}" class="btn btn-secondary" style="justify-content: flex-start;">
+                <span>📁</span> Browse Storage Pool
+            </a>
+        </div>
+    </div>
+</div>
+{% endblock %}

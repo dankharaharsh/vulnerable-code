@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+
+{% block title %}My Profile{% endblock %}
+{% block header_title %}User Account Profile{% endblock %}
+
+{% block header_actions %}
+<a href="{{ url_for('profile_edit') }}" class="btn btn-primary btn-sm">Edit Profile</a>
+{% endblock %}
+
+{% block content %}
+<div class="card" style="max-width: 800px;">
+    <div class="card-header">
+        <h2>Profile Overview</h2>
+        <span class="badge badge-{{ 'admin' if user.role == 'admin' else 'user' }}">{{ user.role }}</span>
+    </div>
+    <div class="card-body">
+        <div style="display: flex; align-items: center; gap: 20px; margin-bottom: 28px; padding-bottom: 20px; border-bottom: 1px solid var(--border-color);">
+            <div class="user-avatar" style="width: 64px; height: 64px; font-size: 24px; background: #2563eb;">
+                {{ user.username[0].upper() }}
+            </div>
+            <div>
+                <h2 style="font-size: 20px; font-weight: 700;">{{ user.display_name or user.username }}</h2>
+                <div style="color: var(--text-muted); font-size: 14px;">@{{ user.username }} &bull; {{ user.email }}</div>
+            </div>
+        </div>
+
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+            <div>
+                <label class="form-label" style="color: var(--text-muted); font-size: 12px; text-transform: uppercase;">User ID</label>
+                <div style="font-weight: 600; font-size: 15px;">#{{ user.id }}</div>
+            </div>
+
+            <div>
+                <label class="form-label" style="color: var(--text-muted); font-size: 12px; text-transform: uppercase;">Corporate Email</label>
+                <div style="font-weight: 600; font-size: 15px;">{{ user.email }}</div>
+            </div>
+
+            <div>
+                <label class="form-label" style="color: var(--text-muted); font-size: 12px; text-transform: uppercase;">Contact Phone</label>
+                <div style="font-weight: 500; font-size: 15px;">{{ user.phone or 'Not configured' }}</div>
+            </div>
+
+            <div>
+                <label class="form-label" style="color: var(--text-muted); font-size: 12px; text-transform: uppercase;">Two-Factor Authentication</label>
+                <div>
+                    {% if user.two_factor_enabled %}
+                        <span class="badge badge-success">Enabled</span>
+                    {% else %}
+                        <span class="badge badge-warning">Disabled</span>
+                    {% endif %}
+                </div>
+            </div>
+
+            <div style="grid-column: 1 / -1;">
+                <label class="form-label" style="color: var(--text-muted); font-size: 12px; text-transform: uppercase;">Office / Mailing Address</label>
+                <div style="font-weight: 500; font-size: 15px;">{{ user.address or 'Not specified' }}</div>
+            </div>
+
+            <div style="grid-column: 1 / -1;">
+                <label class="form-label" style="color: var(--text-muted); font-size: 12px; text-transform: uppercase;">Bio / Department Role</label>
+                <div style="font-weight: 500; font-size: 15px; color: #334155; line-height: 1.6;">
+                    {{ user.bio or 'No biographical information added.' }}
+                </div>
+            </div>
+        </div>
+
+        <div style="margin-top: 32px; padding-top: 20px; border-top: 1px solid var(--border-color); display: flex; gap: 12px;">
+            <a href="{{ url_for('profile_edit') }}" class="btn btn-primary">Modify Information</a>
+            <a href="{{ url_for('two_factor_view') }}" class="btn btn-secondary">Security & 2FA</a>
+        </div>
+    </div>
+</div>
+{% endblock %}

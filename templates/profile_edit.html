@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+
+{% block title %}Edit Profile{% endblock %}
+{% block header_title %}Update Profile Information{% endblock %}
+
+{% block content %}
+<div class="card" style="max-width: 800px;">
+    <div class="card-header">
+        <h2>Account Settings</h2>
+        <span class="badge badge-{{ 'admin' if user.role == 'admin' else 'user' }}">{{ user.role }}</span>
+    </div>
+    <div class="card-body">
+        <!-- 
+            VULN-008 (CWE-639): Insecure Direct Object Reference (IDOR) / BOLA
+            The form includes a client-controlled user_id parameter.
+            The backend accepts this user_id and updates the target record without
+            verifying that the authenticated session owns this profile.
+        -->
+        <form method="POST" action="{{ url_for('profile_edit') }}">
+            <!-- Client-controlled object identifier -->
+            <input type="hidden" name="user_id" id="user_id" value="{{ user.id }}">
+
+            <div class="form-group">
+                <label class="form-label" for="username_static">Username (Immutable)</label>
+                <input type="text" id="username_static" class="form-control" value="{{ user.username }}" disabled style="background-color: #f1f5f9;">
+                <span class="form-hint">Username cannot be changed in standard user tier.</span>
+            </div>
+
+            <div class="form-group">
+                <label class="form-label" for="display_name">Display Name</label>
+                <input type="text" id="display_name" name="display_name" class="form-control" value="{{ user.display_name or '' }}" required>
+            </div>
+
+            <div class="form-group">
+                <label class="form-label" for="phone">Phone Number</label>
+                <input type="text" id="phone" name="phone" class="form-control" value="{{ user.phone or '' }}" placeholder="+1 (555) 019-2834">
+            </div>
+
+            <div class="form-group">
+                <label class="form-label" for="address">Mailing / Office Address</label>
+                <input type="text" id="address" name="address" class="form-control" value="{{ user.address or '' }}" placeholder="100 Enterprise Way, Suite 400">
+            </div>
+
+            <div class="form-group">
+                <label class="form-label" for="bio">Bio & Responsibilities</label>
+                <textarea id="bio" name="bio" class="form-control" rows="4">{{ user.bio or '' }}</textarea>
+            </div>
+
+            <div style="margin-top: 28px; display: flex; gap: 12px;">
+                <button type="submit" class="btn btn-primary">Save Profile Changes</button>
+                <a href="{{ url_for('profile_view') }}" class="btn btn-secondary">Cancel</a>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}
