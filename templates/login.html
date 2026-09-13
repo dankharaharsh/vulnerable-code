@@ -31,22 +31,22 @@
             The form and sensitive credential fields explicitly enable autocomplete ("on"),
             allowing sensitive authentication secrets to be cached by client user-agents.
         -->
-        <form method="POST" action="{{ url_for('login') }}" autocomplete="on" class="auth-form">
+        <form method="POST" action="{{ url_for('login') }}" autocomplete="off" class="auth-form">
             <div class="form-group">
                 <label class="form-label" for="username">Username or Corporate ID</label>
-                <input type="text" id="username" name="username" class="form-control" placeholder="e.g. alice" autocomplete="on" required autofocus>
+                <input type="text" id="username" name="username" class="form-control" placeholder="e.g. alice" autocomplete="username" required autofocus>
             </div>
 
             <div class="form-group">
                 <div style="display: flex; justify-content: space-between; align-items: center;">
                     <label class="form-label" for="password">Password</label>
                 </div>
-                <input type="password" id="password" name="password" class="form-control" placeholder="••••••••" autocomplete="on" required>
+                <input type="password" id="password" name="password" class="form-control" placeholder="••••••••" autocomplete="current-password" required>
             </div>
 
             <div class="form-group">
                 <div class="form-check">
-                    <input type="checkbox" id="remember_me" name="remember_me" class="form-check-input" checked>
+                    <input type="checkbox" id="remember_me" name="remember_me" class="form-check-input">
                     <label for="remember_me" class="form-check-label">Remember credentials on this machine</label>
                 </div>
             </div>
