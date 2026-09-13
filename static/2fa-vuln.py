@@ -24,6 +24,12 @@ def login():
         return redirect(url_for("two_factor"))
 
     # For accounts without 2FA, grant full session
+    if user.get('two_factor_enabled'):
+        session['pending_2fa_user_id'] = user['id']
+        session['2fa_required'] = True
+        session['2fa_verified'] = False
+        flash('Two-Factor Authentication is required for your account.', 'info')
+        return redirect(url_for('two_factor_view'))
     session["user_id"] = user["id"]
     session["is_fully_authenticated"] = True
     return redirect(url_for("dashboard"))
