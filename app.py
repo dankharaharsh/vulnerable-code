@@ -1,3 +1,6 @@
+import re
+from pathlib import Path
+import uuid
 """
 SecureHub VAPT Training Lab — Core Application Server
 Intentionally Vulnerable Web Application for Authorized Cybersecurity Training and Tracegate Platform Evaluation.
@@ -121,11 +124,11 @@ def login():
         # AI Fix: Use parameterized query:
         # cursor.execute("SELECT * FROM users WHERE username = ? AND password = ?", (username, password))
         # -----------------------------------------------------------------
-        raw_auth_query = f"SELECT * FROM users WHERE username = '{username}' AND password = '{password}'"
+        raw_auth_query = "SELECT * FROM users WHERE username = :username AND password = :password"
         
         try:
             cursor = db.cursor()
-            cursor.execute(raw_auth_query)
+            cursor.execute(raw_auth_query, {"username": username, "password": password})
             user = cursor.fetchone()
         except sqlite3.OperationalError:
             # Fallback if arbitrary syntax breaks query
@@ -407,13 +410,13 @@ def upload_view():
         # -----------------------------------------------------------------
         # VULNERABLE LOGIC: Weak extension blocklist instead of strict allowlist
         # -----------------------------------------------------------------
-        DISALLOWED_EXTENSIONS = {".exe", ".bat", ".cmd", ".dll"}
-        if ext in DISALLOWED_EXTENSIONS:
-            flash(f"Security Alert: Upload of executable format '{ext}' is prohibited.", "danger")
-            return redirect(url_for("upload_view"))
+        ALLOWED_EXTENSIONS = {'.png', '.jpg', '.jpeg', '.pdf'}
+        if ext not in ALLOWED_EXTENSIONS:
+            flash(f"Security Alert: Upload format '{ext}' is prohibited. Allowed: png, jpg, jpeg, pdf.", 'danger')
+            return redirect(url_for('upload_view'))
 
         # Save file into upload folder with user-provided filename
-        stored_filename = f"{int(datetime.now().timestamp())}_{original_filename}"
+        stored_filename = f"{uuid.uuid4().hex}{ext}"
         save_path = os.path.join(app.config["UPLOAD_FOLDER"], stored_filename)
         file.save(save_path)
 
@@ -469,7 +472,11 @@ def uploads_gallery():
             if os.path.exists(file_path):
                 try:
                     with open(file_path, "r", encoding="utf-8", errors="ignore") as svg_file:
-                        f_dict["svg_content"] = svg_file.read()
+                        raw_svg = svg_file.read()
+                        # Defensive SVG sanitization: strip active script elements and event handlers
+                        clean_svg = re.sub(r'<script[\s\S]*?</script>', '', raw_svg, flags=re.IGNORECASE)
+                        clean_svg = re.sub(r'\bon\w+\s*=\s*["\'][^"\']*["\']', '', clean_svg, flags=re.IGNORECASE)
+                        f_dict['svg_content'] = clean_svg
                         svg_files.append(f_dict)
                 except Exception:
                     pass
@@ -508,16 +515,13 @@ def download_file():
     # -----------------------------------------------------------------
     # VULNERABLE LOGIC: Unsafe path construction without canonicalization
     # -----------------------------------------------------------------
-    target_path = os.path.join(app.config["UPLOAD_FOLDER"], requested_file)
-
-    # Support flexible relative traversal depth for lab training files
-    if not os.path.exists(target_path):
-        alt_path = os.path.join(BASE_DIR, requested_file)
-        if os.path.exists(alt_path):
-            target_path = alt_path
-        elif "training_note.txt" in requested_file and os.path.exists(os.path.join(LAB_DATA_FOLDER, "training_note.txt")):
-            target_path = os.path.join(LAB_DATA_FOLDER, "training_note.txt")
-
+    # Defensive path canonicalization and directory boundary containment
+    base_dir = Path(app.config['UPLOAD_FOLDER']).resolve()
+    target_path = (base_dir / requested_file).resolve()
+    if base_dir not in target_path.parents and target_path != base_dir:
+        flash('Security Alert: Directory traversal attempt detected.', 'danger')
+        return redirect(url_for('uploads_gallery'))
+    target_path = str(target_path)
     if os.path.exists(target_path):
         return send_file(target_path, as_attachment=True)
     else:
