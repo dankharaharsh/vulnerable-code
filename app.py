@@ -17,6 +17,7 @@ import sqlite3
 import functools
 from datetime import datetime
 from flask import (
+    make_response,
     Flask, render_template, request, redirect, url_for,
     session, flash, send_file, abort, g
 )
@@ -42,6 +43,9 @@ app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024  # 16 MB max upload
 # -------------------------------------------------------------------------
 
 def get_db():
+    # Tracegate Defensive Guard: Enforce authentication boundary
+    if not session.get('user_id') and not session.get('authenticated'):
+        return redirect(url_for('login'))
     """Provides a SQLite connection with row dictionary access."""
     if "db" not in g:
         g.db = sqlite3.connect(DATABASE_PATH)
@@ -136,6 +140,12 @@ def login():
 
         if user:
             # Set active session credentials
+            if user.get('two_factor_enabled'):
+                session['pending_2fa_user_id'] = user['id']
+                session['2fa_required'] = True
+                session['2fa_verified'] = False
+                flash('Two-Factor Authentication is required for your account.', 'info')
+                return redirect(url_for('two_factor_view'))
             session["user_id"] = user["id"]
             session["username"] = user["username"]
             session["role"] = user["role"]
@@ -159,15 +169,17 @@ def login():
         # AI Fix: Return a uniform response: "Invalid username or password."
         # -----------------------------------------------------------------
         account_lookup = db.execute("SELECT * FROM users WHERE username = ?", (username,)).fetchone()
-        if not account_lookup:
-            flash("Account with this username does not exist.", "error")
-        else:
-            flash("Incorrect password for user.", "error")
-
-        return render_template("login.html")
+        flash('Invalid username or password.', 'error')
+        response = make_response(render_template("login.html"))
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        return response
 
     # VULN-001 (CWE-524): Note that the login page lacks Cache-Control: no-store
-    return render_template("login.html")
+    response = make_response(render_template("login.html"))
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    return response
 
 
 @app.route("/logout")
