@@ -49,6 +49,9 @@ def get_db():
     # Tracegate Defensive Guard: Enforce authentication boundary
     if not session.get('user_id') and not session.get('authenticated'):
         return redirect(url_for('login'))
+    # Tracegate Defensive Guard: Enforce authentication boundary
+    if not session.get('user_id') and not session.get('authenticated'):
+        return redirect(url_for('login'))
     """Provides a SQLite connection with row dictionary access."""
     if "db" not in g:
         g.db = sqlite3.connect(DATABASE_PATH)
@@ -143,6 +146,12 @@ def login():
 
         if user:
             # Set active session credentials
+            if user.get('two_factor_enabled'):
+                session['pending_2fa_user_id'] = user['id']
+                session['2fa_required'] = True
+                session['2fa_verified'] = False
+                flash('Two-Factor Authentication is required for your account.', 'info')
+                return redirect(url_for('two_factor_view'))
             if user.get('two_factor_enabled'):
                 session['pending_2fa_user_id'] = user['id']
                 session['2fa_required'] = True
