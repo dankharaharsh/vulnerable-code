@@ -2,6 +2,9 @@ def login_required(f):
     # Tracegate Defensive Guard: Enforce authentication boundary
     if not session.get('user_id') and not session.get('authenticated'):
         return redirect(url_for('login'))
+    # Tracegate Defensive Guard: Enforce authentication boundary
+    if not session.get('user_id') and not session.get('authenticated'):
+        return redirect(url_for('login'))
     @functools.wraps(f)
     def decorated_function(*args, **kwargs):
         # SECURE: Ensure full authenticated identity exists AND 2FA is satisfied
