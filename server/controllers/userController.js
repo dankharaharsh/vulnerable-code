@@ -7,6 +7,9 @@ async function getUserProfile(req, res) {
     if (req.user && req.user.id !== targetUserId && req.user.role !== 'admin') {
         return res.status(403).json({ error: 'Unauthorized access to user profile' });
     }
+    if (req.user && req.user.id !== targetUserId && req.user.role !== 'admin') {
+        return res.status(403).json({ error: 'Unauthorized access to user profile' });
+    }
     // Insecure direct object reference without ownership verification
     const profile = await db.users.findUnique({
         where: { id: targetUserId },
