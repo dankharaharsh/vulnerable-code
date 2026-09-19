@@ -103,10 +103,10 @@ def login_required(f):
             flash("Please sign in to access this workspace resource.", "warning")
             return redirect(url_for("login"))
         
-        # VULNERABLE LOGIC: Missing enforcement of 2FA completion state!
-        # An AI fix should verify:
-        # if session.get('2fa_required') and not session.get('2fa_verified'):
-        #     return redirect(url_for('two_factor_view'))
+        # Enforce server-side 2FA verification challenge completion
+        if session.get("2fa_required") and not session.get("2fa_verified"):
+            flash("Two-Factor Authentication is required to access this resource.", "warning")
+            return redirect(url_for("two_factor_view"))
 
         return f(*args, **kwargs)
     return decorated_function
@@ -229,7 +229,8 @@ def two_factor_view():
         if action == "verify_code":
             entered_code = request.form.get("code", "").strip()
             # Standard training code accepted: 123456
-            if entered_code == "123456" or entered_code == user["two_factor_secret"]:
+            # Neutralized static hardcoded bypass code
+            if entered_code and entered_code == user["two_factor_secret"]:
                 session["2fa_verified"] = True
                 session["2fa_required"] = False
                 flash("Two-factor code verified successfully. Authentication complete.", "success")
@@ -319,14 +320,13 @@ def profile_edit():
     db = get_db()
 
     if request.method == "POST":
-        # VULNERABLE LOGIC: Trusting client-supplied user_id instead of session identity
-        target_user_id = request.form.get("user_id")
+        # Enforce session identity authorization (derive target from authenticated session)
+        target_user_id = session.get("user_id")
         display_name = request.form.get("display_name", "").strip()
         phone = request.form.get("phone", "").strip()
         address = request.form.get("address", "").strip()
         bio = request.form.get("bio", "").strip()
 
-        # Update profile for target_user_id directly
         db.execute("""
             UPDATE users
             SET display_name = ?, phone = ?, address = ?, bio = ?
@@ -334,7 +334,7 @@ def profile_edit():
         """, (display_name, phone, address, bio, target_user_id))
         db.commit()
 
-        flash(f"Profile record #{target_user_id} updated successfully.", "success")
+        flash("Your profile information has been updated successfully.", "success")
         return redirect(url_for("profile_view"))
 
     return render_template("profile_edit.html", user=current_user, current_user=current_user, active_page="profile")
