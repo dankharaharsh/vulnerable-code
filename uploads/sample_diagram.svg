@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 120" width="100%" height="80">
+  <rect width="400" height="120" rx="8" fill="#f1f5f9" stroke="#cbd5e1" stroke-width="2"/>
+  <circle cx="50" cy="60" r="24" fill="#2563eb"/>
+  <text x="50" y="66" font-family="sans-serif" font-size="16" font-weight="bold" fill="#ffffff" text-anchor="middle">SH</text>
+  <text x="90" y="55" font-family="sans-serif" font-size="16" font-weight="bold" fill="#1e293b">SecureHub Architecture</text>
+  <text x="90" y="75" font-family="sans-serif" font-size="12" fill="#64748b">Verified Operations Node — Baseline Vector</text>
+</svg>

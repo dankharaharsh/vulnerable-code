@@ -1,0 +1,4 @@
+INTERNAL INFRASTRUCTURE ACCESS MATRIX - PRODUCTION NODES
+Node 01: 10.240.0.1 (Root SSH Access via Bastion)
+Node 02: 10.240.12.88 (Worker Fabric)
+Node 03: 10.240.4.15 (Audit Vault)

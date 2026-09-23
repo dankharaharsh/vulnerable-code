@@ -1,0 +1,132 @@
+{% extends "base.html" %}
+
+{% block title %}Shopping Cart{% endblock %}
+{% block header_title %}Workspace Cart & Checkout{% endblock %}
+
+{% block header_actions %}
+<a href="{{ url_for('store_catalog') }}" class="btn btn-secondary btn-sm">← Continue Browsing</a>
+{% endblock %}
+
+{% block content %}
+<div style="display: grid; grid-template-columns: 2fr 1fr; gap: 24px;">
+    <!-- Items Table -->
+    <div class="card">
+        <div class="card-header">
+            <h2>Cart Items ({{ cart_items|length }})</h2>
+        </div>
+        <div class="card-body" style="padding: 0;">
+            {% if cart_items %}
+            <div class="table-responsive">
+                <table class="table">
+                    <thead>
+                        <tr>
+                            <th>Item Description</th>
+                            <th>Unit Price</th>
+                            <th>Quantity</th>
+                            <th>Line Subtotal</th>
+                            <th>Action</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for item in cart_items %}
+                        <tr>
+                            <td>
+                                <div style="font-weight: 600;">{{ item.name }}</div>
+                                <code style="font-size: 11px; color: var(--text-muted);">{{ item.sku }}</code>
+                            </td>
+                            <td>${{ "%.2f"|format(item.unit_price) }}</td>
+                            <td>
+                                <!-- INTENTIONAL LAB VULNERABILITY: VULN-35: Negative Quantity & Integer Underflow Logic Flaws -->
+                                <form method="POST" action="{{ url_for('store_cart_update') }}" style="display: flex; gap: 6px; align-items: center;">
+                                    <input type="hidden" name="product_id" value="{{ item.product_id }}">
+                                    <input type="number" name="quantity" value="{{ item.quantity }}" class="form-control" style="width: 70px; padding: 4px 8px; font-size: 13px;">
+                                    <button type="submit" class="btn btn-secondary btn-sm" style="padding: 4px 8px; font-size: 11px;">Update</button>
+                                </form>
+                            </td>
+                            <td style="font-weight: 600; color: {% if item.subtotal < 0 %}#dc2626{% else %}var(--text-color){% endif %};">
+                                ${{ "%.2f"|format(item.subtotal) }}
+                            </td>
+                            <td>
+                                <form method="POST" action="{{ url_for('store_cart_update') }}">
+                                    <input type="hidden" name="product_id" value="{{ item.product_id }}">
+                                    <input type="hidden" name="quantity" value="0">
+                                    <button type="submit" class="btn btn-secondary btn-sm" style="color: #dc2626; border-color: #fca5a5;">Remove</button>
+                                </form>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <div style="padding: 40px; text-align: center; color: var(--text-muted);">
+                <div style="font-size: 36px; margin-bottom: 8px;">🛒</div>
+                <p>Your shopping cart is currently empty.</p>
+                <a href="{{ url_for('store_catalog') }}" class="btn btn-primary btn-sm" style="margin-top: 12px;">Browse Services</a>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- Summary & Checkout Sidebar -->
+    <div>
+        <!-- Voucher Card -->
+        <div class="card" style="margin-bottom: 20px;">
+            <div class="card-header">
+                <h2>Promotional Voucher</h2>
+            </div>
+            <div class="card-body">
+                <!-- INTENTIONAL LAB VULNERABILITY: VULN-36: Promo Voucher Replay & Concurrent Race Conditions -->
+                <form method="POST" action="{{ url_for('store_apply_voucher') }}">
+                    <div class="form-group" style="margin-bottom: 12px;">
+                        <label class="form-label" for="voucher_code">Coupon / Voucher Code</label>
+                        <div style="display: flex; gap: 8px;">
+                            <input type="text" id="voucher_code" name="voucher_code" placeholder="e.g. SAVE50" class="form-control" style="text-transform: uppercase;">
+                            <button type="submit" class="btn btn-secondary">Apply</button>
+                        </div>
+                    </div>
+                </form>
+                {% if voucher %}
+                <div style="padding: 8px 12px; background: #ecfdf5; border: 1px solid #6ee7b7; border-radius: 6px; font-size: 13px; color: #065f46; display: flex; justify-content: space-between;">
+                    <span>Voucher Applied: <strong>{{ voucher.code }}</strong></span>
+                    <span>-${{ "%.2f"|format(discount) }}</span>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+
+        <!-- Order Summary Card -->
+        <div class="card">
+            <div class="card-header">
+                <h2>Order Summary</h2>
+            </div>
+            <div class="card-body">
+                <div style="display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 14px;">
+                    <span style="color: var(--text-muted);">Items Subtotal:</span>
+                    <span style="font-weight: 600;">${{ "%.2f"|format(subtotal) }}</span>
+                </div>
+                {% if discount > 0 %}
+                <div style="display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 14px; color: #059669;">
+                    <span>Discount:</span>
+                    <span>-${{ "%.2f"|format(discount) }}</span>
+                </div>
+                {% endif %}
+                <div style="border-top: 1px solid var(--border-color); margin: 12px 0; padding-top: 12px; display: flex; justify-content: space-between; align-items: baseline;">
+                    <span style="font-size: 16px; font-weight: 600;">Estimated Total:</span>
+                    <span style="font-size: 22px; font-weight: 700; color: var(--primary-color);">${{ "%.2f"|format(total) }}</span>
+                </div>
+
+                {% if cart_items %}
+                <!-- INTENTIONAL LAB VULNERABILITY: VULN-34: Price & Currency Manipulation via Parameter Tampering -->
+                <form method="POST" action="{{ url_for('store_checkout') }}" style="margin-top: 20px;">
+                    <input type="hidden" name="currency" value="USD">
+                    <button type="submit" class="btn btn-primary" style="width: 100%; justify-content: center; padding: 12px;">
+                        Proceed to Secure Checkout →
+                    </button>
+                </form>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

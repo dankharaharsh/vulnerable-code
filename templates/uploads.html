@@ -1,0 +1,109 @@
+{% extends "base.html" %}
+
+{% block title %}Asset Storage Pool{% endblock %}
+{% block header_title %}Storage Pool & File Browser{% endblock %}
+
+{% block header_actions %}
+<a href="{{ url_for('upload_view') }}" class="btn btn-primary btn-sm">+ Upload New File</a>
+{% endblock %}
+
+{% block content %}
+<div class="card">
+    <div class="card-header">
+        <h2>Managed Files & Documents</h2>
+        <span style="font-size: 13px; color: var(--text-muted);">{{ files|length }} Files Recorded</span>
+    </div>
+    <div class="card-body" style="padding: 0;">
+        {% if files %}
+        <div class="table-responsive">
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th>Asset ID</th>
+                        <th>Original Name</th>
+                        <th>Stored Reference</th>
+                        <th>Content Type</th>
+                        <th>Size</th>
+                        <th>Uploaded By</th>
+                        <th>Date</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for f in files %}
+                    <tr>
+                        <td style="font-weight: 600; color: var(--text-muted);">#{{ f.id }}</td>
+                        <td style="font-weight: 600;">
+                            {% if f.is_svg %}
+                                <span style="margin-right: 4px;">🖼️</span>
+                            {% else %}
+                                <span style="margin-right: 4px;">📄</span>
+                            {% endif %}
+                            {{ f.original_filename }}
+                        </td>
+                        <td><code>{{ f.stored_filename }}</code></td>
+                        <td><span class="badge badge-user">{{ f.mime_type }}</span></td>
+                        <td>{{ (f.size / 1024)|round(1) }} KB</td>
+                        <td>{{ f.uploader_name or 'System' }}</td>
+                        <td style="font-size: 12px; color: var(--text-muted);">{{ f.created_at }}</td>
+                        <td>
+                            <a href="{{ url_for('download_file', file=f.stored_filename, download='1') }}" class="btn btn-secondary btn-sm" download>
+                                ⬇ Download
+                            </a>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <div style="padding: 40px; text-align: center; color: var(--text-muted);">
+            <div style="font-size: 40px; margin-bottom: 12px;">📁</div>
+            <p>No files uploaded yet. Upload a document or SVG vector image to get started.</p>
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+<!-- SVG Vector Render Preview Gallery -->
+{% if svg_files %}
+<div class="card" style="margin-top: 32px;">
+    <div class="card-header">
+        <h2>SVG Vector Graphics Preview Gallery</h2>
+        <span class="badge badge-info">Vector Preview</span>
+    </div>
+    <div class="card-body">
+        <p style="font-size: 14px; color: var(--text-muted); margin-bottom: 20px;">
+            The portal renders uploaded SVG graphics for operations team visualization.
+        </p>
+
+        <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 24px;">
+            {% for svg in svg_files %}
+            <div style="border: 1px solid var(--border-color); border-radius: var(--radius); padding: 16px; background: #ffffff;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                    <span style="font-weight: 600; font-size: 14px;">{{ svg.original_filename }}</span>
+                    <a href="{{ url_for('download_file', file=svg.stored_filename, download='1') }}" class="btn btn-secondary btn-sm">Download</a>
+                </div>
+
+                <!-- INTENTIONAL LAB VULNERABILITY -->
+                <!-- VULN-24: Stored Cross-Site Scripting (XSS) via Malicious SVG Upload -->
+                <div class="svg-preview-container" style="display: flex; align-items: center; justify-content: center; min-height: 120px; background: #f8fafc; border-radius: 6px; padding: 10px;">
+                    {% if svg.svg_content %}
+                        <div class="svg-rendered-inline" style="max-width: 100%; max-height: 120px; display: flex; align-items: center; justify-content: center;">
+                            {{ svg.svg_content | safe }}
+                        </div>
+                    {% else %}
+                        <img src="{{ url_for('download_file', file=svg.stored_filename) }}" alt="{{ svg.original_filename }}" style="max-width: 100%; max-height: 120px; object-fit: contain;">
+                    {% endif %}
+                </div>
+                
+                <div style="font-size: 11px; color: var(--text-muted); margin-top: 8px;">
+                    Uploaded on {{ svg.created_at }} &bull; Stored as: <code>{{ svg.stored_filename }}</code>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+</div>
+{% endif %}
+{% endblock %}
