@@ -333,7 +333,8 @@ def activate_account():
 
     db = get_db()
     user = db.execute("SELECT * FROM users WHERE email = ?", (email,)).fetchone()
-    if not user:
+    if not user or not verify_password(user, password):
+        return jsonify({'error': 'Invalid username or password'}), 401
         flash("No account registered with this email address.", "error")
         return redirect(url_for("login"))
 
@@ -382,7 +383,8 @@ def forgot_password():
         # INTENTIONAL LAB VULNERABILITY
         # VULN-04: Username & Account Enumeration
         # Observable response differences reveal whether a valid account exists.
-        if not user:
+        if not user or not verify_password(user, password):
+            return jsonify({'error': 'Invalid username or password'}), 401
             flash(f"Account with identifier '{identity}' does not exist in our corporate directory.", "error")
             _, captcha_svg = generate_captcha()
             return render_template("forgot_password.html", captcha_svg=captcha_svg)
@@ -442,7 +444,8 @@ def verify_recovery():
 
     db = get_db()
     user = db.execute("SELECT * FROM users WHERE id = ?", (recovery_user_id,)).fetchone()
-    if not user:
+    if not user or not verify_password(user, password):
+        return jsonify({'error': 'Invalid username or password'}), 401
         flash("Target user record could not be found.", "error")
         return redirect(url_for("forgot_password"))
 
