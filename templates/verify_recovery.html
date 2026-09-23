@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Verify Recovery Code — SecureHub</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body class="auth-wrapper">
+    <div class="auth-card">
+        <div class="auth-header">
+            <div class="brand-logo">S</div>
+            <h1>Verify Recovery Code</h1>
+            <p>Verification for account: <strong>{{ user.username }}</strong> ({{ user.email }})</p>
+        </div>
+
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                <div class="flash-messages">
+                    {% for category, message in messages %}
+                        <div class="alert alert-{{ category if category != 'error' else 'danger' }}">
+                            <span>{{ message }}</span>
+                        </div>
+                    {% endfor %}
+                </div>
+            {% endif %}
+        {% endwith %}
+
+        <form method="POST" action="{{ url_for('verify_recovery') }}" class="auth-form">
+            <div class="form-group">
+                <label class="form-label" for="code">4-Digit One-Time Code</label>
+                <input type="text" id="code" name="code" class="form-control" placeholder="••••" maxlength="6" style="font-size: 24px; letter-spacing: 0.3em; text-align: center;" required autofocus>
+                <span class="form-hint">Enter the 4-digit code sent to your registered address.</span>
+            </div>
+
+            <div class="form-group" style="margin-top: 24px;">
+                <button type="submit" class="btn btn-primary btn-block">Verify Code</button>
+            </div>
+
+            <div style="margin-top: 18px; text-align: center;">
+                <a href="{{ url_for('forgot_password') }}" style="font-size: 13px; color: var(--text-muted); text-decoration: none;">Request a different code</a>
+                &bull;
+                <a href="{{ url_for('login') }}" style="font-size: 13px; color: var(--primary); text-decoration: none;">Back to Sign In</a>
+            </div>
+        </form>
+    </div>
+</body>
+</html>

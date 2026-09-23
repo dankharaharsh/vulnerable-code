@@ -1,0 +1,112 @@
+{% extends "base.html" %}
+
+{% block title %}Admin Console{% endblock %}
+{% block header_title %}System Administration & Maintenance{% endblock %}
+
+{% block content %}
+<!-- INTENTIONAL LAB VULNERABILITY: VULN-37: Vertical Privilege Escalation on Administrative Functions -->
+<div class="stats-grid" style="margin-bottom: 24px;">
+    <div class="stat-card">
+        <div class="stat-label">Active Users</div>
+        <div class="stat-value">{{ total_users }}</div>
+        <div class="stat-trend">Registered accounts</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-label">Processed Orders</div>
+        <div class="stat-value">{{ total_orders }}</div>
+        <div class="stat-trend">Total transactions</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-label">Uploaded Assets</div>
+        <div class="stat-value">{{ total_files }}</div>
+        <div class="stat-trend">Storage repository</div>
+    </div>
+</div>
+
+<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-bottom: 24px;">
+    <!-- Maintenance Operations Card -->
+    <div class="card">
+        <div class="card-header">
+            <h2>Administrative Operations</h2>
+            <span class="badge badge-admin">Privileged Zone</span>
+        </div>
+        <div class="card-body">
+            <p style="color: var(--text-muted); font-size: 14px; margin-bottom: 20px;">
+                Execute routine server maintenance, database snapshot backups, and administrative system utilities.
+            </p>
+
+            <!-- INTENTIONAL LAB VULNERABILITY: VULN-37: Vertical Privilege Escalation -->
+            <form method="POST" action="{{ url_for('admin_system_backup') }}">
+                <div style="padding: 16px; background: #f8fafc; border: 1px solid var(--border-color); border-radius: 8px; margin-bottom: 16px;">
+                    <div style="font-weight: 600; margin-bottom: 4px;">System Snapshot & Database Backup</div>
+                    <p style="font-size: 13px; color: var(--text-muted); margin-bottom: 12px;">
+                        Captures live database state and active configurations to disk.
+                    </p>
+                    <button type="submit" class="btn btn-primary btn-sm">💾 Trigger System Backup Now</button>
+                </div>
+            </form>
+
+            <div style="display: flex; gap: 12px;">
+                <a href="{{ url_for('audit_logs_view') }}" class="btn btn-secondary btn-sm">Inspect Audit Logs →</a>
+                <a href="{{ url_for('users_list') }}" class="btn btn-secondary btn-sm">Manage User Directory →</a>
+            </div>
+        </div>
+    </div>
+
+    <!-- System Diagnostics Card -->
+    <div class="card">
+        <div class="card-header">
+            <h2>Environment Telemetry</h2>
+            <span class="badge badge-user">Public Diagnostics</span>
+        </div>
+        <div class="card-body">
+            <p style="font-size: 13px; color: var(--text-muted); margin-bottom: 16px;">
+                Direct diagnostics API endpoint for load balancers and system monitoring agents.
+            </p>
+            <div style="margin-bottom: 16px;">
+                <div style="font-size: 12px; color: var(--text-muted);">Diagnostics URL:</div>
+                <code><a href="{{ url_for('system_info') }}" target="_blank">/system/info</a></code>
+            </div>
+            <a href="{{ url_for('system_info') }}" target="_blank" class="btn btn-secondary btn-sm">
+                🔍 View System Telemetry JSON
+            </a>
+        </div>
+    </div>
+</div>
+
+<!-- Recent Security Audit Trail Preview -->
+<div class="card">
+    <div class="card-header">
+        <h2>Recent Security Audit Events</h2>
+        <a href="{{ url_for('audit_logs_view') }}" class="btn btn-secondary btn-sm">View All Logs</a>
+    </div>
+    <div class="card-body" style="padding: 0;">
+        <div class="table-responsive">
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Event Type</th>
+                        <th>Actor</th>
+                        <th>Details</th>
+                        <th>Source IP</th>
+                        <th>Timestamp</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for l in recent_logs %}
+                    <tr>
+                        <td>#{{ l.id }}</td>
+                        <td><span class="badge badge-user">{{ l.event_type }}</span></td>
+                        <td style="font-weight: 600;">{{ l.actor_username }}</td>
+                        <td style="font-size: 13px;">{{ l.details }}</td>
+                        <td><code>{{ l.ip_address }}</code></td>
+                        <td style="font-size: 12px; color: var(--text-muted);">{{ l.created_at }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}

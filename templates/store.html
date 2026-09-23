@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+
+{% block title %}Services & Infrastructure Store{% endblock %}
+{% block header_title %}Service & Storage Catalog{% endblock %}
+
+{% block header_actions %}
+<a href="{{ url_for('store_cart') }}" class="btn btn-primary btn-sm">
+    🛒 View Cart ({{ cart_count }})
+</a>
+{% endblock %}
+
+{% block content %}
+<div class="card" style="margin-bottom: 24px;">
+    <div class="card-header">
+        <h2>Available Infrastructure Quotas & Subscriptions</h2>
+        <span style="font-size: 13px; color: var(--text-muted);">Self-Service Enterprise Add-ons</span>
+    </div>
+    <div class="card-body">
+        <p style="color: var(--text-muted); font-size: 14px; margin-bottom: 20px;">
+            Provision additional cloud storage quota, specialized compliance nodes, priority SLA support, and threat feeds for your workspace.
+        </p>
+
+        <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 20px;">
+            {% for p in products %}
+            <div style="border: 1px solid var(--border-color); border-radius: 8px; padding: 20px; display: flex; flex-direction: column; justify-content: space-between; background: #ffffff;">
+                <div>
+                    <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 8px;">
+                        <span class="badge badge-user" style="font-size: 11px;">{{ p.category }}</span>
+                        <code style="font-size: 11px; color: var(--text-muted);">{{ p.sku }}</code>
+                    </div>
+                    <h3 style="font-size: 16px; font-weight: 600; margin-bottom: 8px; color: var(--text-color);">{{ p.name }}</h3>
+                    <p style="font-size: 13px; color: var(--text-muted); line-height: 1.5; margin-bottom: 16px;">
+                        {{ p.description }}
+                    </p>
+                </div>
+
+                <div style="border-top: 1px solid var(--border-color); padding-top: 16px; display: flex; justify-content: space-between; align-items: center;">
+                    <div>
+                        <div style="font-size: 11px; color: var(--text-muted); text-transform: uppercase;">Unit Price</div>
+                        <div style="font-size: 20px; font-weight: 700; color: var(--primary-color);">${{ "%.2f"|format(p.price) }}</div>
+                    </div>
+                    <form method="POST" action="{{ url_for('store_cart_add') }}" style="display: flex; gap: 8px; align-items: center;">
+                        <input type="hidden" name="product_id" value="{{ p.id }}">
+                        <input type="number" name="quantity" value="1" min="1" style="width: 55px; padding: 4px 6px; border: 1px solid var(--border-color); border-radius: 4px; font-size: 13px; text-align: center;">
+                        <button type="submit" class="btn btn-primary btn-sm">+ Add</button>
+                    </form>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+</div>
+{% endblock %}

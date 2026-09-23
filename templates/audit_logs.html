@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+
+{% block title %}Security Audit Trail{% endblock %}
+{% block header_title %}System Telemetry & Audit Logs{% endblock %}
+
+{% block header_actions %}
+<a href="{{ url_for('admin_dashboard') }}" class="btn btn-secondary btn-sm">← Admin Console</a>
+{% endblock %}
+
+{% block content %}
+<div class="card">
+    <div class="card-header">
+        <h2>Security Event Log Stream</h2>
+        <span style="font-size: 13px; color: var(--text-muted);">{{ logs|length }} Log Entries</span>
+    </div>
+    <div class="card-body" style="padding: 0;">
+        {% if logs %}
+        <div class="table-responsive">
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th>Log ID</th>
+                        <th>Event Type</th>
+                        <th>Actor</th>
+                        <th>Details</th>
+                        <th>IP Address</th>
+                        <th>Timestamp</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for l in logs %}
+                    <tr>
+                        <td style="font-weight: 600; color: var(--text-muted);">#{{ l.id }}</td>
+                        <td>
+                            <span class="badge {% if 'AUTH' in l.event_type %}badge-admin{% elif 'BACKUP' in l.event_type %}badge-user{% else %}badge-user{% endif %}">
+                                {{ l.event_type }}
+                            </span>
+                        </td>
+                        <td style="font-weight: 600;">{{ l.actor_username }}</td>
+                        <td style="font-size: 13px; max-width: 320px;">{{ l.details }}</td>
+                        <td><code>{{ l.ip_address }}</code></td>
+                        <td style="font-size: 12px; color: var(--text-muted);">{{ l.created_at }}</td>
+                        <td>
+                            <!-- INTENTIONAL LAB VULNERABILITY: VULN-39: Audit Trail Event Log Tampering / Deletion -->
+                            <form method="POST" action="{{ url_for('audit_log_delete') }}" onsubmit="return confirm('Permanently remove this audit log entry?');">
+                                <input type="hidden" name="log_id" value="{{ l.id }}">
+                                <button type="submit" class="btn btn-secondary btn-sm" style="color: #dc2626; border-color: #fca5a5; padding: 2px 8px; font-size: 11px;">
+                                    🗑️ Delete
+                                </button>
+                            </form>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <div style="padding: 40px; text-align: center; color: var(--text-muted);">
+            <div style="font-size: 36px; margin-bottom: 8px;">📜</div>
+            <p>No audit trail records found in the database.</p>
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}
