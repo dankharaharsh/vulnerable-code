@@ -1,3 +1,4 @@
+import re
 """
 SecureHub VAPT Training Lab — Core Application Server
 Intentionally Vulnerable Web Application for Authorized Cybersecurity Training and Tracegate Platform Evaluation.
@@ -548,8 +549,7 @@ def two_factor_view():
         if action == "verify_code":
             entered_code = request.form.get("code", "").strip()
             # Standard training code accepted: 123456
-            # Neutralized static hardcoded bypass code
-            if entered_code and entered_code == user["two_factor_secret"]:
+            if entered_code == "123456" or entered_code == user["two_factor_secret"]:
                 session["2fa_verified"] = True
                 session["2fa_required"] = False
                 flash("Two-factor code verified successfully. Authentication complete.", "success")
@@ -945,7 +945,11 @@ def uploads_gallery():
             try:
                 if os.path.isfile(svg_path):
                     with open(svg_path, "r", encoding="utf-8", errors="ignore") as svg_file:
-                        f_dict["svg_content"] = svg_file.read()
+                        raw_svg = svg_file.read()
+                        # Defensive SVG sanitization: strip active script elements and event handlers
+                        clean_svg = re.sub(r'<script[\s\S]*?</script>', '', raw_svg, flags=re.IGNORECASE)
+                        clean_svg = re.sub(r'\bon\w+\s*=\s*["\'][^"\']*["\']', '', clean_svg, flags=re.IGNORECASE)
+                        f_dict['svg_content'] = clean_svg
                 else:
                     f_dict["svg_content"] = ""
             except Exception:
