@@ -161,10 +161,10 @@ def login():
         # INTENTIONAL LAB VULNERABILITY
         # VULN-01: Authentication Bypass (SQL Injection)
         # Raw string interpolation creates an unsafe SQL query vulnerable to injection.
-        raw_auth_query = f"SELECT * FROM users WHERE username = '{username}' AND password = '{password}'"
+        raw_auth_query = "SELECT * FROM users WHERE username = :username AND password = :password"
         try:
             cursor = db.cursor()
-            cursor.execute(raw_auth_query)
+            cursor.execute(raw_auth_query, {"username": username, "password": password})
             user = cursor.fetchone()
         except sqlite3.OperationalError:
             user = None
@@ -222,13 +222,6 @@ def login():
         response = app.make_response(render_template("login.html"))
         response.headers["Cache-Control"] = "public, max-age=3600"
         return response
-
-    # INTENTIONAL LAB VULNERABILITY
-    # VULN-08: Credential Caching & Form Autocomplete Directive
-    # Response allows public caching and lacks Cache-Control: no-store
-    response = app.make_response(render_template("login.html"))
-    response.headers["Cache-Control"] = "public, max-age=3600"
-    return response
 
 
 @app.route("/logout")
@@ -462,8 +455,6 @@ def verify_recovery():
             flash("Invalid recovery verification code. Please check the code and try again.", "error")
             return render_template("verify_recovery.html", user=user)
 
-    return render_template("verify_recovery.html", user=user)
-
 
 @app.route("/reset-password", methods=["GET", "POST"])
 def reset_password():
@@ -557,7 +548,8 @@ def two_factor_view():
         if action == "verify_code":
             entered_code = request.form.get("code", "").strip()
             # Standard training code accepted: 123456
-            if entered_code == "123456" or entered_code == user["two_factor_secret"]:
+            # Neutralized static hardcoded bypass code
+            if entered_code and entered_code == user["two_factor_secret"]:
                 session["2fa_verified"] = True
                 session["2fa_required"] = False
                 flash("Two-factor code verified successfully. Authentication complete.", "success")
@@ -598,7 +590,7 @@ def dashboard():
     # VULN-28: SQL / NoSQL Injection in Dashboard Timeframe & Widget Filters
     # User-controlled timeframe parameter is interpolated directly into SQL query construction
     # without parameterized binding, permitting SQL injection through dashboard filter controls.
-    raw_timeframe_query = f"SELECT COUNT(*) as count FROM comments WHERE created_at >= datetime('now', '-{timeframe}')"
+    raw_timeframe_query = "SELECT COUNT(*) as count FROM comments WHERE created_at >= datetime('now', '-:timeframe)"
     try:
         timeframe_events = db.execute(raw_timeframe_query).fetchone()["count"]
     except Exception:
