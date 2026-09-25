@@ -1,3 +1,5 @@
+from pathlib import Path
+import uuid
 """
 SecureHub VAPT Training Lab — Core Application Server
 Intentionally Vulnerable Web Application for Authorized Cybersecurity Training and Tracegate Platform Evaluation.
@@ -161,10 +163,10 @@ def login():
         # INTENTIONAL LAB VULNERABILITY
         # VULN-01: Authentication Bypass (SQL Injection)
         # Raw string interpolation creates an unsafe SQL query vulnerable to injection.
-        raw_auth_query = f"SELECT * FROM users WHERE username = '{username}' AND password = '{password}'"
+        raw_auth_query = "SELECT * FROM users WHERE username = :username AND password = :password"
         try:
             cursor = db.cursor()
-            cursor.execute(raw_auth_query)
+            cursor.execute(raw_auth_query, {"username": username, "password": password})
             user = cursor.fetchone()
         except sqlite3.OperationalError:
             user = None
@@ -222,13 +224,6 @@ def login():
         response = app.make_response(render_template("login.html"))
         response.headers["Cache-Control"] = "public, max-age=3600"
         return response
-
-    # INTENTIONAL LAB VULNERABILITY
-    # VULN-08: Credential Caching & Form Autocomplete Directive
-    # Response allows public caching and lacks Cache-Control: no-store
-    response = app.make_response(render_template("login.html"))
-    response.headers["Cache-Control"] = "public, max-age=3600"
-    return response
 
 
 @app.route("/logout")
@@ -462,8 +457,6 @@ def verify_recovery():
             flash("Invalid recovery verification code. Please check the code and try again.", "error")
             return render_template("verify_recovery.html", user=user)
 
-    return render_template("verify_recovery.html", user=user)
-
 
 @app.route("/reset-password", methods=["GET", "POST"])
 def reset_password():
@@ -598,7 +591,7 @@ def dashboard():
     # VULN-28: SQL / NoSQL Injection in Dashboard Timeframe & Widget Filters
     # User-controlled timeframe parameter is interpolated directly into SQL query construction
     # without parameterized binding, permitting SQL injection through dashboard filter controls.
-    raw_timeframe_query = f"SELECT COUNT(*) as count FROM comments WHERE created_at >= datetime('now', '-{timeframe}')"
+    raw_timeframe_query = "SELECT COUNT(*) as count FROM comments WHERE created_at >= datetime('now', '-:timeframe)"
     try:
         timeframe_events = db.execute(raw_timeframe_query).fetchone()["count"]
     except Exception:
@@ -714,11 +707,19 @@ def profile_edit():
     db = get_db()
 
     if request.method == "POST":
+        # Validate CSRF token preventing cross-site request forgery on profile changes
+        csrf_token = request.form.get("csrf_token") or request.headers.get("X-CSRF-Token")
+        if not csrf_token or csrf_token != session.get("csrf_token"):
+            flash("Security check failed: Invalid or missing CSRF token.", "error")
+            return redirect(url_for("profile_view"))
         # INTENTIONAL LAB VULNERABILITY
         # VULN-18: Insecure Direct Object References (IDOR) on Profile Update
         # The endpoint accepts a user_id parameter from the client request and updates
         # that target record without validating that it matches the authenticated session user.
         client_user_id = request.form.get("user_id")
+        if client_user_id and str(session.get('user_id')) != str(client_user_id) and session.get('role') != 'admin':
+            flash('Unauthorized: access denied to modify another user profile.', 'danger')
+            return redirect(url_for('profile_view'))
         if client_user_id and str(client_user_id).isdigit():
             target_user_id = int(client_user_id)
         else:
@@ -727,7 +728,8 @@ def profile_edit():
         display_name = request.form.get("display_name", "").strip()
         phone = request.form.get("phone", "").strip()
         address = request.form.get("address", "").strip()
-        bio = request.form.get("bio", "").strip()
+        import html
+        bio = html.escape(request.form.get("bio", "").strip())
 
         # INTENTIONAL LAB VULNERABILITY
         # VULN-38: Parameter Tampering on User Role & Permission Assignment
@@ -893,13 +895,13 @@ def upload_view():
         # The upload handler relies on an incomplete blocklist rather than a strict allowlist.
         # It blocks common compiled Windows executables (.exe, .bat, .cmd, .dll), but permits
         # arbitrary web scripts and executable server files (.php, .phtml, .html, .py, .sh, .jsp).
-        DISALLOWED_EXTENSIONS = {".exe", ".bat", ".cmd", ".dll"}
-        if ext in DISALLOWED_EXTENSIONS:
-            flash(f"Upload of executable binary format '{ext}' is prohibited for security compliance.", "danger")
-            return redirect(url_for("upload_view"))
+        ALLOWED_EXTENSIONS = {'.png', '.jpg', '.jpeg', '.pdf'}
+        if ext not in ALLOWED_EXTENSIONS:
+            flash(f"Security Alert: Upload format '{ext}' is prohibited. Allowed: png, jpg, jpeg, pdf.", 'danger')
+            return redirect(url_for('upload_view'))
 
         # Save file into upload folder with timestamp prefix
-        stored_filename = f"{int(datetime.now().timestamp())}_{original_filename}"
+        stored_filename = f"{uuid.uuid4().hex}{ext}"
         save_path = os.path.join(app.config["UPLOAD_FOLDER"], stored_filename)
         file.save(save_path)
 
