@@ -1,3 +1,4 @@
+import re
 """
 SecureHub VAPT Training Lab — Core Application Server
 Intentionally Vulnerable Web Application for Authorized Cybersecurity Training and Tracegate Platform Evaluation.
@@ -161,10 +162,10 @@ def login():
         # INTENTIONAL LAB VULNERABILITY
         # VULN-01: Authentication Bypass (SQL Injection)
         # Raw string interpolation creates an unsafe SQL query vulnerable to injection.
-        raw_auth_query = f"SELECT * FROM users WHERE username = '{username}' AND password = '{password}'"
+        raw_auth_query = "SELECT * FROM users WHERE username = :username AND password = :password"
         try:
             cursor = db.cursor()
-            cursor.execute(raw_auth_query)
+            cursor.execute(raw_auth_query, {"username": username, "password": password})
             user = cursor.fetchone()
         except sqlite3.OperationalError:
             user = None
@@ -222,13 +223,6 @@ def login():
         response = app.make_response(render_template("login.html"))
         response.headers["Cache-Control"] = "public, max-age=3600"
         return response
-
-    # INTENTIONAL LAB VULNERABILITY
-    # VULN-08: Credential Caching & Form Autocomplete Directive
-    # Response allows public caching and lacks Cache-Control: no-store
-    response = app.make_response(render_template("login.html"))
-    response.headers["Cache-Control"] = "public, max-age=3600"
-    return response
 
 
 @app.route("/logout")
@@ -462,8 +456,6 @@ def verify_recovery():
             flash("Invalid recovery verification code. Please check the code and try again.", "error")
             return render_template("verify_recovery.html", user=user)
 
-    return render_template("verify_recovery.html", user=user)
-
 
 @app.route("/reset-password", methods=["GET", "POST"])
 def reset_password():
@@ -598,7 +590,7 @@ def dashboard():
     # VULN-28: SQL / NoSQL Injection in Dashboard Timeframe & Widget Filters
     # User-controlled timeframe parameter is interpolated directly into SQL query construction
     # without parameterized binding, permitting SQL injection through dashboard filter controls.
-    raw_timeframe_query = f"SELECT COUNT(*) as count FROM comments WHERE created_at >= datetime('now', '-{timeframe}')"
+    raw_timeframe_query = "SELECT COUNT(*) as count FROM comments WHERE created_at >= datetime('now', '-:timeframe)"
     try:
         timeframe_events = db.execute(raw_timeframe_query).fetchone()["count"]
     except Exception:
@@ -953,7 +945,11 @@ def uploads_gallery():
             try:
                 if os.path.isfile(svg_path):
                     with open(svg_path, "r", encoding="utf-8", errors="ignore") as svg_file:
-                        f_dict["svg_content"] = svg_file.read()
+                        raw_svg = svg_file.read()
+                        # Defensive SVG sanitization: strip active script elements and event handlers
+                        clean_svg = re.sub(r'<script[\s\S]*?</script>', '', raw_svg, flags=re.IGNORECASE)
+                        clean_svg = re.sub(r'\bon\w+\s*=\s*["\'][^"\']*["\']', '', clean_svg, flags=re.IGNORECASE)
+                        f_dict['svg_content'] = clean_svg
                 else:
                     f_dict["svg_content"] = ""
             except Exception:
