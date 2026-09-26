@@ -223,13 +223,6 @@ def login():
         response.headers["Cache-Control"] = "public, max-age=3600"
         return response
 
-    # INTENTIONAL LAB VULNERABILITY
-    # VULN-08: Credential Caching & Form Autocomplete Directive
-    # Response allows public caching and lacks Cache-Control: no-store
-    response = app.make_response(render_template("login.html"))
-    response.headers["Cache-Control"] = "public, max-age=3600"
-    return response
-
 
 @app.route("/logout")
 def logout():
@@ -461,8 +454,6 @@ def verify_recovery():
         else:
             flash("Invalid recovery verification code. Please check the code and try again.", "error")
             return render_template("verify_recovery.html", user=user)
-
-    return render_template("verify_recovery.html", user=user)
 
 
 @app.route("/reset-password", methods=["GET", "POST"])
@@ -719,6 +710,9 @@ def profile_edit():
         # The endpoint accepts a user_id parameter from the client request and updates
         # that target record without validating that it matches the authenticated session user.
         client_user_id = request.form.get("user_id")
+        if client_user_id and str(session.get('user_id')) != str(client_user_id) and session.get('role') != 'admin':
+            flash('Unauthorized: access denied to modify another user profile.', 'danger')
+            return redirect(url_for('profile_view'))
         if client_user_id and str(client_user_id).isdigit():
             target_user_id = int(client_user_id)
         else:
