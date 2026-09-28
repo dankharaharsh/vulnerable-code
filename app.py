@@ -1,4 +1,3 @@
-import re
 """
 SecureHub VAPT Training Lab — Core Application Server
 Intentionally Vulnerable Web Application for Authorized Cybersecurity Training and Tracegate Platform Evaluation.
@@ -945,11 +944,7 @@ def uploads_gallery():
             try:
                 if os.path.isfile(svg_path):
                     with open(svg_path, "r", encoding="utf-8", errors="ignore") as svg_file:
-                        raw_svg = svg_file.read()
-                        # Defensive SVG sanitization: strip active script elements and event handlers
-                        clean_svg = re.sub(r'<script[\s\S]*?</script>', '', raw_svg, flags=re.IGNORECASE)
-                        clean_svg = re.sub(r'\bon\w+\s*=\s*["\'][^"\']*["\']', '', clean_svg, flags=re.IGNORECASE)
-                        f_dict['svg_content'] = clean_svg
+                        f_dict["svg_content"] = svg_file.read()
                 else:
                     f_dict["svg_content"] = ""
             except Exception:
