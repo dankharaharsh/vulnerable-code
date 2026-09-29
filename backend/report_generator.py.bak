@@ -1,0 +1,1564 @@
+"""
+Tracegate Enterprise Microsoft Word (.docx) & Native PDF VAPT Report Generator.
+
+Generates professional, consultant-quality, auditable cybersecurity assessment reports
+using python-docx and Microsoft Word COM automation with:
+- Executive cover page & formal document control history
+- Confidentiality notices & mandatory statutory GRC reference disclaimer
+- Deterministic risk posture scoring & severity SLA matrices
+- Security test coverage statistics (evaluated, clean, vulnerabilities, coverage %)
+- Detailed technical findings with monospaced PoC callouts (#F8FAFC), HTTP request/response
+  blocks, embedded screenshot evidence with centered Figure captions, CIA impact ratings,
+  technical root causes, SIEM detection rules, developer validation procedures,
+  defense-in-depth mitigations, and retest verification lifecycles
+- Prioritized remediation action plans & retest validation registers
+- Dedicated GRC Framework & Control Mappings (NIST CSF 2.0, ISO/IEC 27001:2022,
+  SOC 2 TSC, OWASP WSTG v4.2, and PCI DSS v4.0)
+- Observed security control gaps domain analysis
+- Formal executive sign-off blocks
+- Comprehensive Appendices A through F
+"""
+
+import io
+import os
+import re
+import json
+import base64
+import logging
+from pathlib import Path
+from typing import Dict, Any, List, Optional, Tuple
+from datetime import datetime
+from PIL import Image
+
+import docx
+from docx import Document
+from docx.shared import Inches, Pt, RGBColor
+from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.enum.table import WD_TABLE_ALIGNMENT
+from docx.oxml import parse_xml, OxmlElement
+from docx.oxml.ns import nsdecls, qn
+
+from backend.knowledge_base import get_finding_template_for_test
+from backend.grc_frameworks import (
+    MANDATORY_GRC_DISCLAIMER,
+    FRAMEWORKS_METADATA,
+    map_finding_to_grc_frameworks,
+    aggregate_security_control_gaps
+)
+from backend.report_model import (
+    assemble_normalized_report_model,
+    validate_report_model_integrity,
+    ReportIntegrityError,
+    redact_sensitive_secrets,
+    format_cvss_vector,
+    get_remediation_sla
+)
+
+logger = logging.getLogger("report_generator")
+
+# Professional Color Palette
+COLOR_NAVY = RGBColor(30, 58, 138)       # Deep Navy headings (#1E3A8A)
+COLOR_SLATE = RGBColor(15, 23, 42)      # Primary text (#0F172A)
+COLOR_MUTED = RGBColor(100, 116, 139)   # Subtitles (#64748B)
+COLOR_CRIT = RGBColor(185, 28, 28)      # Critical severity (#B91C1C)
+COLOR_HIGH = RGBColor(194, 65, 12)      # High severity (#C2410C)
+COLOR_MED = RGBColor(180, 83, 9)        # Medium severity (#B45309)
+COLOR_LOW = RGBColor(4, 120, 87)        # Low severity (#047857)
+COLOR_INFO = RGBColor(2, 132, 199)      # Informational severity (#0284C7)
+
+HEX_BG_HEADER = "1E3A8A"                # Dark navy header fill
+HEX_BG_CALLOUT = "F8FAFC"               # Very light slate callout background
+HEX_BG_MUTED = "F1F5F9"                 # Subtle border/zebra fill
+HEX_BG_ALERT = "FEF2F2"                 # Soft red callout fill
+HEX_BG_WARN = "FFFBEB"                  # Soft amber callout fill
+HEX_BG_SUCCESS = "ECFDF5"               # Soft green callout fill
+
+REPORTS_DIR = Path(__file__).resolve().parent.parent / "data" / "reports"
+REPORTS_DIR.mkdir(parents=True, exist_ok=True)
+
+# =============================================================================
+# DOCUMENT STYLING HELPERS
+# =============================================================================
+
+def set_cell_background(cell, fill_hex: str):
+    """Applies background shading color to a table cell."""
+    tc_pr = cell._tc.get_or_add_tcPr()
+    shd = parse_xml(f'<w:shd {nsdecls("w")} w:fill="{fill_hex}"/>')
+    tc_pr.append(shd)
+
+def set_cell_margins(cell, top: int = 100, bottom: int = 100, left: int = 140, right: int = 140):
+    """Sets internal padding (in dxa) for a table cell."""
+    tc_pr = cell._tc.get_or_add_tcPr()
+    tc_mar = parse_xml(
+        f'<w:tcMar {nsdecls("w")}>'
+        f'<w:top w:w="{top}" w:type="dxa"/>'
+        f'<w:bottom w:w="{bottom}" w:type="dxa"/>'
+        f'<w:left w:w="{left}" w:type="dxa"/>'
+        f'<w:right w:w="{right}" w:type="dxa"/>'
+        f'</w:tcMar>'
+    )
+    tc_pr.append(tc_mar)
+
+def calculate_deterministic_risk_rating(
+    crit_count: int,
+    high_count: int,
+    med_count: int,
+    low_count: int,
+    info_count: int,
+    total_tests: int,
+    tested_tests: int
+) -> Tuple[str, RGBColor, str]:
+    """
+    Deterministic calculation for Tracegate Assessment Risk Rating.
+    Guarantees consistent, documented risk classifications based on actual findings.
+    """
+    total_findings = crit_count + high_count + med_count + low_count + info_count
+
+    if crit_count >= 1 or high_count >= 2:
+        return "CRITICAL RISK", COLOR_CRIT, (
+            "The target architecture possesses vulnerabilities with severe exploitability or full impact "
+            "over sensitive assets, user accounts, or underlying systems. Urgent remediation is mandatory."
+        )
+    elif high_count >= 1 or med_count >= 3:
+        return "HIGH RISK", COLOR_HIGH, (
+            "The target environment contains high-impact flaws or multiple moderate weaknesses that could "
+            "be chained to bypass security boundaries. Timely remediation should be prioritized."
+        )
+    elif med_count >= 1 or low_count >= 4:
+        return "MEDIUM RISK", COLOR_MED, (
+            "The assessment identified moderate risks or multiple baseline flaws requiring planned remediation "
+            "within the standard engineering cycle."
+        )
+    elif low_count >= 1:
+        return "LOW RISK", COLOR_LOW, (
+            "Identified issues present minimal immediate exploitability or low technical impact. "
+            "Remediation is recommended during routine maintenance."
+        )
+    elif info_count >= 1:
+        return "INFORMATIONAL RISK", COLOR_INFO, (
+            "Only informational observations or defense-in-depth enhancements were noted. "
+            "No direct vulnerability exploitation vectors were confirmed."
+        )
+    elif total_tests > 0 and tested_tests >= total_tests and total_findings == 0:
+        return "CLEAN POSTURE / NEGLIGIBLE RISK", COLOR_LOW, (
+            "No confirmed vulnerabilities were identified across all evaluated security controls. "
+            "All targeted controls operated in accordance with expected baseline security standards."
+        )
+    else:
+        return "INCOMPLETE ASSESSMENT / NOT EVALUATED", COLOR_MUTED, (
+            "No confirmed vulnerabilities were identified; however, planned security controls have not been "
+            "fully evaluated. This posture must not be interpreted as certified security."
+        )
+
+def add_styled_heading(doc: Document, text: str, level: int):
+    """Creates a cleanly styled heading."""
+    h = doc.add_heading(text, level=level)
+    h.paragraph_format.keep_with_next = True
+    h.paragraph_format.space_before = Pt(14)
+    h.paragraph_format.space_after = Pt(6)
+    if level == 1:
+        for run in h.runs:
+            run.font.name = "Calibri"
+            run.font.size = Pt(15)
+            run.font.bold = True
+            run.font.color.rgb = COLOR_NAVY
+    elif level == 2:
+        for run in h.runs:
+            run.font.name = "Calibri"
+            run.font.size = Pt(12.5)
+            run.font.bold = True
+            run.font.color.rgb = COLOR_NAVY
+    elif level == 3:
+        for run in h.runs:
+            run.font.name = "Calibri"
+            run.font.size = Pt(11)
+            run.font.bold = True
+            run.font.color.rgb = COLOR_SLATE
+    return h
+
+def add_callout_box(doc: Document, text: str, bg_hex: str = HEX_BG_CALLOUT, border_color_rgb: RGBColor = COLOR_NAVY, title: Optional[str] = None):
+    """Renders an indented shaded callout box with optional bold title."""
+    table = doc.add_table(rows=1, cols=1)
+    table.alignment = WD_TABLE_ALIGNMENT.CENTER
+    cell = table.rows[0].cells[0]
+    cell.width = Inches(6.5)
+    set_cell_background(cell, bg_hex)
+    set_cell_margins(cell, top=140, bottom=140, left=180, right=180)
+
+    p = cell.paragraphs[0]
+    p.paragraph_format.space_before = Pt(0)
+    p.paragraph_format.space_after = Pt(0)
+    p.paragraph_format.line_spacing = 1.15
+
+    if title:
+        rtitle = p.add_run(f"{title}\n")
+        rtitle.font.name = "Calibri"
+        rtitle.font.size = Pt(10)
+        rtitle.font.bold = True
+        rtitle.font.color.rgb = border_color_rgb
+
+    rtext = p.add_run(text)
+    rtext.font.name = "Calibri"
+    rtext.font.size = Pt(9.5)
+    rtext.font.color.rgb = COLOR_SLATE
+
+    # Empty paragraph for spacing
+    p_spacer = doc.add_paragraph()
+    p_spacer.paragraph_format.space_before = Pt(4)
+    p_spacer.paragraph_format.space_after = Pt(4)
+
+def add_monospaced_block(doc: Document, code_text: str):
+    """Renders a monospaced code snippet block in Consolas 8.5pt with #F8FAFC shading."""
+    clean_text = code_text.strip() if code_text else "No technical snippet recorded."
+    table = doc.add_table(rows=1, cols=1)
+    table.alignment = WD_TABLE_ALIGNMENT.CENTER
+    cell = table.rows[0].cells[0]
+    cell.width = Inches(6.5)
+    set_cell_background(cell, HEX_BG_CALLOUT)
+    set_cell_margins(cell, top=120, bottom=120, left=160, right=160)
+
+    p = cell.paragraphs[0]
+    p.paragraph_format.space_before = Pt(0)
+    p.paragraph_format.space_after = Pt(0)
+    p.paragraph_format.line_spacing = 1.05
+
+    run = p.add_run(clean_text)
+    run.font.name = "Consolas"
+    run.font.size = Pt(8.5)
+    run.font.color.rgb = COLOR_SLATE
+
+    p_spacer = doc.add_paragraph()
+    p_spacer.paragraph_format.space_before = Pt(4)
+    p_spacer.paragraph_format.space_after = Pt(4)
+
+def embed_evidence_screenshot(doc: Document, ev_item: Dict[str, Any]):
+    """
+    Decodes and embeds base64/binary screenshot evidence into the document
+    with centered Figure captions.
+    """
+    raw_data = ev_item.get("data")
+    caption_text = ev_item.get("caption") or "Evidence demonstrating the reported behavior"
+    fig_label = ev_item.get("figure_label", "Figure 1")
+
+    # Clean data uri prefix if present
+    img_bytes = None
+    if raw_data:
+        try:
+            if "," in str(raw_data):
+                b64_part = str(raw_data).split(",", 1)[1]
+            else:
+                b64_part = str(raw_data)
+            img_bytes = base64.b64decode(b64_part)
+        except Exception as e:
+            logger.warning(f"Failed to decode base64 evidence: {e}")
+
+    # Fallback to disk if filename points to local path
+    if not img_bytes and ev_item.get("filename"):
+        fn = Path(ev_item["filename"])
+        if fn.exists():
+            try:
+                with open(fn, "rb") as f_in:
+                    img_bytes = f_in.read()
+            except Exception as e:
+                logger.warning(f"Failed to read evidence from disk {fn}: {e}")
+
+    if img_bytes:
+        try:
+            img_io = io.BytesIO(img_bytes)
+            # Validate with PIL
+            with Image.open(img_io) as pil_img:
+                w, h = pil_img.size
+
+            img_io.seek(0)
+            p_img = doc.add_paragraph()
+            p_img.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            p_img.paragraph_format.space_before = Pt(6)
+            p_img.paragraph_format.space_after = Pt(4)
+            run_img = p_img.add_run()
+            # Scale to max 5.8 inches width
+            run_img.add_picture(img_io, width=Inches(min(5.8, max(2.5, w / 150.0))))
+
+            # Caption paragraph
+            p_cap = doc.add_paragraph()
+            p_cap.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            p_cap.paragraph_format.space_before = Pt(2)
+            p_cap.paragraph_format.space_after = Pt(8)
+            rcap = p_cap.add_run(f"{fig_label}: {caption_text}")
+            rcap.font.name = "Calibri"
+            rcap.font.size = Pt(8.5)
+            rcap.font.italic = True
+            rcap.font.color.rgb = COLOR_MUTED
+            return
+        except Exception as e:
+            logger.warning(f"Failed to add picture run to docx: {e}")
+
+    # Fallback placeholder callout if image couldn't be rendered
+    p_ph = doc.add_paragraph()
+    rph = p_ph.add_run(f"[{fig_label}: Evidence file '{ev_item.get('filename', 'capture.png')}' registered and archived]")
+    rph.font.name = "Calibri"
+    rph.font.size = Pt(8.5)
+    rph.font.italic = True
+    rph.font.color.rgb = COLOR_MUTED
+
+# =============================================================================
+# WORD COM PDF CONVERTER
+# =============================================================================
+
+def convert_docx_to_pdf(docx_path: str) -> Optional[str]:
+    """
+    Converts a .docx document to native Microsoft Word PDF using Word COM automation.
+    Returns the absolute path to the generated .pdf file, or None if conversion fails.
+    """
+    docx_file = Path(docx_path).resolve()
+    if not docx_file.exists():
+        logger.error(f"Cannot convert non-existent docx: {docx_path}")
+        return None
+
+    pdf_file = docx_file.with_suffix(".pdf")
+    try:
+        import pythoncom
+        import win32com.client
+        pythoncom.CoInitialize()
+        try:
+            word = win32com.client.Dispatch("Word.Application")
+            word.Visible = False
+            word.DisplayAlerts = 0
+            doc = word.Documents.Open(str(docx_file))
+            # 17 = wdFormatPDF
+            doc.SaveAs(str(pdf_file), FileFormat=17)
+            doc.Close(SaveChanges=0)
+            word.Quit()
+            logger.info(f"Native Word PDF successfully compiled at: {pdf_file}")
+            return str(pdf_file)
+        finally:
+            pythoncom.CoUninitialize()
+    except Exception as e:
+        logger.warning(f"Word COM PDF conversion encountered an error: {e}", exc_info=True)
+        return None
+
+# =============================================================================
+# MAIN ENTERPRISE DOCX REPORT GENERATOR
+# =============================================================================
+
+def generate_docx_report(
+    project: Dict[str, Any],
+    version: str = "v1.0",
+    author_name: Optional[str] = None,
+    selected_finding_ids: Optional[List[str]] = None,
+    findings: Optional[List[Dict[str, Any]]] = None,
+    allow_clean_report: bool = False,
+    methodology: str = "owasp_wstg",
+    historical_reports: Optional[List[Dict[str, Any]]] = None,
+    checklist_items: Optional[List[Dict[str, Any]]] = None
+) -> str:
+    """
+    Generates a professional VAPT Assessment Report in Microsoft Word (.docx) format
+    and automatically compiles the matching native PDF export.
+    Consumes the canonical normalized report model.
+    """
+    # 1. Assemble single source-of-truth normalized report model
+    model = assemble_normalized_report_model(
+        project=project,
+        version=version,
+        author_name=author_name,
+        selected_finding_ids=selected_finding_ids,
+        findings=findings,
+        allow_clean_report=allow_clean_report,
+        methodology=methodology,
+        historical_reports=historical_reports,
+        checklist_items=checklist_items
+    )
+
+    # 1.1 Pre-Render Integrity Validation
+    validation_errors = validate_report_model_integrity(model)
+    if validation_errors:
+        logger.warning(f"Pre-render model integrity logged warnings: {validation_errors}")
+
+    proj_meta = model["project"]
+    doc_meta = model["document_metadata"]
+    metrics = model["metrics"]
+    risk = model["risk_posture"]
+    active_findings = model["findings"]
+    control_gaps = model["control_gaps"]
+    figures_index = model["figures_index"]
+
+    doc = Document()
+
+    # 2. Configure 1-inch margins & formal running headers/footers
+    for section in doc.sections:
+        section.top_margin = Inches(1.0)
+        section.bottom_margin = Inches(1.0)
+        section.left_margin = Inches(1.0)
+        section.right_margin = Inches(1.0)
+
+        # Header
+        header = section.header
+        hp = header.paragraphs[0]
+        hp.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+        hrun = hp.add_run("TRACEGATE SECURITY ASSESSMENT  |  STRICTLY CONFIDENTIAL")
+        hrun.font.name = "Calibri"
+        hrun.font.size = Pt(8.5)
+        hrun.font.color.rgb = COLOR_MUTED
+
+        # Footer
+        footer = section.footer
+        fp = footer.paragraphs[0]
+        fp.alignment = WD_ALIGN_PARAGRAPH.LEFT
+        frun1 = fp.add_run(f"Target: {proj_meta['name']} ({doc_meta['version']})  |  Classification: {doc_meta['classification']}")
+        frun1.font.name = "Calibri"
+        frun1.font.size = Pt(8.5)
+        frun1.font.color.rgb = COLOR_MUTED
+
+    # =========================================================================
+    # 1. COVER PAGE
+    # =========================================================================
+    p_pre = doc.add_paragraph()
+    p_pre.paragraph_format.space_before = Pt(40)
+
+    p_eyebrow = doc.add_paragraph()
+    run_eyebrow = p_eyebrow.add_run("TRACEGATE CYBERSECURITY ASSESSMENT & VAPT PLATFORM")
+    run_eyebrow.font.name = "Calibri"
+    run_eyebrow.font.size = Pt(11)
+    run_eyebrow.font.bold = True
+    run_eyebrow.font.color.rgb = COLOR_NAVY
+    p_eyebrow.paragraph_format.space_after = Pt(8)
+
+    p_title = doc.add_paragraph()
+    run_title = p_title.add_run("VULNERABILITY ASSESSMENT & PENETRATION TESTING REPORT")
+    run_title.font.name = "Calibri"
+    run_title.font.size = Pt(22)
+    run_title.font.bold = True
+    run_title.font.color.rgb = COLOR_SLATE
+    p_title.paragraph_format.space_after = Pt(6)
+
+    p_sub = doc.add_paragraph()
+    run_sub = p_sub.add_run(f"Target System: {proj_meta['name']}  |  {proj_meta['environment']}")
+    run_sub.font.name = "Calibri"
+    run_sub.font.size = Pt(13)
+    run_sub.font.color.rgb = COLOR_MUTED
+    p_sub.paragraph_format.space_after = Pt(36)
+
+    # Cover Page Metadata Table
+    meta_table = doc.add_table(rows=6, cols=2)
+    meta_table.alignment = WD_TABLE_ALIGNMENT.CENTER
+    m_widths = [Inches(2.2), Inches(4.3)]
+    meta_data = [
+        ("Client Organization", proj_meta["organization"]),
+        ("Target URL / Host", proj_meta["target_url"]),
+        ("Assessment Methodology", doc_meta["methodology_name"]),
+        ("Report Document Version", doc_meta["version"]),
+        ("Lead Security Assessor", doc_meta["author_name"]),
+        ("Assessment Date", doc_meta["generation_date"])
+    ]
+    for idx, (label, val) in enumerate(meta_data):
+        r_cells = meta_table.rows[idx].cells
+        r_cells[0].width = m_widths[0]
+        r_cells[1].width = m_widths[1]
+        set_cell_margins(r_cells[0], top=80, bottom=80, left=100, right=100)
+        set_cell_margins(r_cells[1], top=80, bottom=80, left=100, right=100)
+        set_cell_background(r_cells[0], HEX_BG_MUTED)
+
+        p0 = r_cells[0].paragraphs[0]
+        r0 = p0.add_run(label)
+        r0.font.name = "Calibri"
+        r0.font.bold = True
+        r0.font.size = Pt(9.5)
+        r0.font.color.rgb = COLOR_SLATE
+
+        p1 = r_cells[1].paragraphs[0]
+        r1 = p1.add_run(val)
+        r1.font.name = "Calibri"
+        r1.font.size = Pt(9.5)
+        r1.font.color.rgb = COLOR_SLATE
+
+    # Classification Badge
+    p_badge = doc.add_paragraph()
+    p_badge.paragraph_format.space_before = Pt(30)
+    p_badge.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    r_badge = p_badge.add_run(f"DOCUMENT CLASSIFICATION: {doc_meta['classification']}")
+    r_badge.font.name = "Calibri"
+    r_badge.font.bold = True
+    r_badge.font.size = Pt(10)
+    r_badge.font.color.rgb = COLOR_CRIT
+
+    # =========================================================================
+    # 2. DOCUMENT CONTROL
+    # =========================================================================
+    doc.add_page_break()
+    add_styled_heading(doc, "1. Document Control & Revision History", level=1)
+    p_dc = doc.add_paragraph()
+    p_dc.add_run(
+        "This document is maintained under formal configuration management. All modifications, technical reviews, "
+        "and client releases are tracked in the document revision history below."
+    )
+
+    dc_table = doc.add_table(rows=1, cols=5)
+    dc_table.alignment = WD_TABLE_ALIGNMENT.CENTER
+    dc_headers = ["Version", "Release Date", "Author / Assessor", "Reviewer", "Change Summary"]
+    dc_widths = [Inches(0.9), Inches(1.2), Inches(1.5), Inches(1.3), Inches(1.6)]
+
+    for c_idx, title in enumerate(dc_headers):
+        cell = dc_table.rows[0].cells[c_idx]
+        cell.width = dc_widths[c_idx]
+        set_cell_background(cell, HEX_BG_HEADER)
+        set_cell_margins(cell, top=100, bottom=100, left=100, right=100)
+        p = cell.paragraphs[0]
+        r = p.add_run(title)
+        r.font.name = "Calibri"
+        r.font.bold = True
+        r.font.size = Pt(9)
+        r.font.color.rgb = RGBColor(255, 255, 255)
+
+    # Populate revision rows
+    hist_entries = doc_meta.get("historical_reports") or []
+    if not hist_entries:
+        hist_entries = [{
+            "version": doc_meta["version"],
+            "created_at": doc_meta["generation_date"],
+            "created_by": doc_meta["author_name"],
+            "reviewer": doc_meta["reviewer_name"],
+            "notes": "Official VAPT Assessment Report release"
+        }]
+
+    for idx, h in enumerate(hist_entries):
+        row = dc_table.add_row()
+        vals = [
+            h.get("version", doc_meta["version"]),
+            h.get("created_at", doc_meta["generation_date"]),
+            h.get("created_by") or doc_meta["author_name"],
+            doc_meta["reviewer_name"],
+            "Initial Assessment Package" if idx == 0 else "Updated findings package and retest verification"
+        ]
+        for c_idx, val in enumerate(vals):
+            cell = row.cells[c_idx]
+            cell.width = dc_widths[c_idx]
+            set_cell_margins(cell, top=80, bottom=80, left=80, right=80)
+            if idx % 2 == 1:
+                set_cell_background(cell, HEX_BG_MUTED)
+            p = cell.paragraphs[0]
+            r = p.add_run(str(val))
+            r.font.name = "Calibri"
+            r.font.size = Pt(8.5)
+            r.font.color.rgb = COLOR_SLATE
+
+    # Document Structure Overview / Table of Contents
+    p_toc_head = doc.add_paragraph()
+    p_toc_head.paragraph_format.space_before = Pt(14)
+    r_th = p_toc_head.add_run("Report Structure Overview:")
+    r_th.font.name = "Calibri"
+    r_th.font.bold = True
+    r_th.font.size = Pt(10)
+    r_th.font.color.rgb = COLOR_NAVY
+
+    toc_summary = (
+        "• Section 1: Document Control & Revision History\n"
+        "• Section 2: Confidentiality Notice & Statutory GRC Reference Disclaimer\n"
+        "• Section 3: Assessment Overview & Objectives\n"
+        "• Section 4: Executive Summary & Deterministic Risk Posture\n"
+        "• Section 5: Risk Rating Methodology & Deterministic Thresholds\n"
+        "• Section 6: Findings Severity Matrix & Recommended Remediation Windows\n"
+        "• Section 7: Assessment Scope, Boundaries & Operational Assumptions\n"
+        "• Section 8: Testing Methodology & Standards (OWASP WSTG v4.2, NIST SP 800-115)\n"
+        "• Section 9: Security Test Coverage & Statistics\n"
+        "• Section 10: Findings Summary Table\n"
+        "• Section 11: Detailed Technical Findings (Observed Evidence & Analysis)\n"
+        "• Section 12: Prioritized Remediation Action Plan\n"
+        "• Section 13: Retest & Validation Lifecycle Register\n"
+        "• Section 14: GRC / Security Framework & Control Mappings\n"
+        "• Section 15: Observed Security Control Gaps Domain Analysis\n"
+        "• Section 16: Assessment Conclusion & Formal Sign-Off\n"
+        "• Appendices A–F: Findings Register, Figure Register, CWE & GRC Indexes, Metadata"
+    )
+    p_toc_body = doc.add_paragraph()
+    r_tb = p_toc_body.add_run(toc_summary)
+    r_tb.font.name = "Calibri"
+    r_tb.font.size = Pt(8.5)
+    r_tb.font.color.rgb = COLOR_MUTED
+
+    # =========================================================================
+    # 3. CONFIDENTIALITY NOTICE & STATUTORY GRC DISCLAIMER
+    # =========================================================================
+    doc.add_paragraph().paragraph_format.space_before = Pt(12)
+    add_styled_heading(doc, "2. Confidentiality Notice & GRC Reference Disclaimer", level=1)
+
+    add_callout_box(
+        doc,
+        "CONFIDENTIALITY NOTICE: This document contains proprietary, sensitive, and confidential security assessment "
+        "findings belonging to the designated client organization. Unauthorized distribution, copying, or disclosure of "
+        "the contents of this report is strictly prohibited under applicable Non-Disclosure Agreements (NDAs). "
+        "Storage and transmission must utilize strong cryptographic controls.",
+        bg_hex=HEX_BG_CALLOUT,
+        border_color_rgb=COLOR_NAVY,
+        title="LEGAL & PROPRIETARY NOTICE"
+    )
+
+    add_callout_box(
+        doc,
+        MANDATORY_GRC_DISCLAIMER,
+        bg_hex=HEX_BG_WARN,
+        border_color_rgb=COLOR_MED,
+        title="STATUTORY GRC & COMPLIANCE MAPPING DISCLAIMER"
+    )
+
+    # =========================================================================
+    # 4. ASSESSMENT OVERVIEW & OBJECTIVES
+    # =========================================================================
+    add_styled_heading(doc, "3. Assessment Overview & Objectives", level=1)
+    p_obj = doc.add_paragraph()
+    p_obj.add_run(
+        f"Tracegate was engaged to conduct an authorized, comprehensive Vulnerability Assessment and Penetration Testing "
+        f"(VAPT) engagement against the '{proj_meta['name']}' environment ({proj_meta['target_url']}).\n\n"
+        f"The primary objectives of this assessment were:\n"
+        f"• Identify security vulnerabilities and architecture flaws across web endpoints, APIs, and access boundaries.\n"
+        f"• Validate exploitability through safe, controlled Proof of Concept (PoC) technical procedures.\n"
+        f"• Map identified weaknesses to Governance, Risk, and Compliance (GRC) standards (NIST CSF 2.0, ISO 27001:2022, SOC 2 TSC, OWASP WSTG v4.2, and PCI DSS v4.0).\n"
+        f"• Provide prioritized, actionable remediation recommendations with developer validation procedures and defense-in-depth guidance."
+    )
+
+    # =========================================================================
+    # 5. EXECUTIVE SUMMARY
+    # =========================================================================
+    doc.add_page_break()
+    add_styled_heading(doc, "4. Executive Summary", level=1)
+
+    p_exec_intro = doc.add_paragraph()
+    if metrics["total_findings"] > 0:
+        p_exec_intro.add_run(
+            f"During the security assessment of '{proj_meta['name']}', the security team evaluated target controls "
+            f"and confirmed a total of {metrics['total_findings']} security vulnerabilities across the authorized scope. "
+            f"The assessment identified {metrics['total_findings']} confirmed security finding"
+            f"{'s' if metrics['total_findings'] != 1 else ''} requiring remediation."
+        )
+    else:
+        p_exec_intro.add_run(
+            f"During the security assessment of '{proj_meta['name']}', no confirmed vulnerabilities were identified "
+            f"across the evaluated security controls. All targeted endpoints demonstrated adherence to baseline defensive requirements."
+        )
+
+    # Executive Deterministic Risk Rating Callout Box
+    add_callout_box(
+        doc,
+        f"OVERALL ASSESSMENT POSTURE: {risk['label']}\n{risk['description']}",
+        bg_hex=HEX_BG_ALERT if "CRITICAL" in risk["label"] or "HIGH" in risk["label"] else (HEX_BG_SUCCESS if "CLEAN" in risk["label"] else HEX_BG_CALLOUT),
+        border_color_rgb=COLOR_CRIT if "CRITICAL" in risk["label"] else COLOR_NAVY,
+        title="DETERMINISTIC ASSESSMENT RISK POSTURE"
+    )
+
+    # Severity Distribution Summary Table
+    add_styled_heading(doc, "Severity Breakdown", level=2)
+    sum_table = doc.add_table(rows=6, cols=5)
+    sum_table.alignment = WD_TABLE_ALIGNMENT.CENTER
+    s_headers = ["Severity Rating", "Count", "Remediation Urgency", "Remediation SLA Target", "Percentage"]
+    s_widths = [Inches(1.4), Inches(0.8), Inches(1.5), Inches(1.6), Inches(1.2)]
+
+    for c_idx, title in enumerate(s_headers):
+        cell = sum_table.rows[0].cells[c_idx]
+        cell.width = s_widths[c_idx]
+        set_cell_background(cell, HEX_BG_HEADER)
+        set_cell_margins(cell, top=100, bottom=100, left=100, right=100)
+        p = cell.paragraphs[0]
+        r = p.add_run(title)
+        r.font.name = "Calibri"
+        r.font.bold = True
+        r.font.size = Pt(9)
+        r.font.color.rgb = RGBColor(255, 255, 255)
+
+    sev_rows_data = [
+        ("CRITICAL", metrics["critical_count"], "Immediate", "24 to 48 Hours", COLOR_CRIT),
+        ("HIGH", metrics["high_count"], "Urgent", "7 Calendar Days", COLOR_HIGH),
+        ("MEDIUM", metrics["medium_count"], "Planned", "30 Calendar Days", COLOR_MED),
+        ("LOW", metrics["low_count"], "Routine", "90 Calendar Days", COLOR_LOW),
+        ("INFORMATIONAL", metrics["info_count"], "Advisory", "Next Scheduled Release", COLOR_INFO),
+    ]
+
+    total_f = max(metrics["total_findings"], 1)
+    for idx, (sev_name, cnt, urgency, sla_target, col) in enumerate(sev_rows_data):
+        row = sum_table.rows[idx + 1]
+        pct = f"{(cnt / total_f) * 100:.1f}%" if metrics["total_findings"] > 0 else "0.0%"
+        vals = [sev_name, str(cnt), urgency, sla_target, pct]
+
+        for c_idx, val in enumerate(vals):
+            cell = row.cells[c_idx]
+            cell.width = s_widths[c_idx]
+            set_cell_margins(cell, top=70, bottom=70, left=80, right=80)
+            if idx % 2 == 1:
+                set_cell_background(cell, HEX_BG_MUTED)
+            p = cell.paragraphs[0]
+            r = p.add_run(val)
+            r.font.name = "Calibri"
+            r.font.size = Pt(8.5)
+            if c_idx == 0:
+                r.font.bold = True
+                r.font.color.rgb = col
+            elif c_idx == 1 and cnt > 0:
+                r.font.bold = True
+
+    # =========================================================================
+    # 6. RISK RATING METHODOLOGY
+    # =========================================================================
+    add_styled_heading(doc, "5. Risk Rating Methodology", level=1)
+    p_risk_meth = doc.add_paragraph()
+    p_risk_meth.add_run(
+        "Tracegate calculates assessment risk posture through a deterministic scoring matrix derived from the distribution "
+        "and severity of confirmed vulnerabilities:\n"
+        "• CRITICAL RISK: Assigned if ≥ 1 Critical vulnerability or ≥ 2 High vulnerabilities are confirmed.\n"
+        "• HIGH RISK: Assigned if ≥ 1 High vulnerability or ≥ 3 Medium vulnerabilities are confirmed.\n"
+        "• MEDIUM RISK: Assigned if ≥ 1 Medium vulnerability or ≥ 4 Low vulnerabilities are confirmed.\n"
+        "• LOW RISK: Assigned if ≥ 1 Low vulnerability is confirmed.\n"
+        "• INFORMATIONAL: Assigned when only informational or defense-in-depth observations are noted.\n"
+        "• CLEAN POSTURE: Assigned when all planned test controls are evaluated with 0 confirmed vulnerabilities."
+    )
+
+    # =========================================================================
+    # 7. FINDINGS SEVERITY MATRIX & SLAS
+    # =========================================================================
+    add_styled_heading(doc, "6. Findings Severity Matrix & SLAs", level=1)
+    p_sla = doc.add_paragraph()
+    p_sla.add_run(
+        "Organizations should remediate identified findings according to recommended priority targets. "
+        "Suggested remediation timeframes represent recommended industry targets based on CVSS severity and business impact. "
+        "They do not constitute contractual or regulatory service level agreements unless formally adopted by organizational policy.\n\n"
+        "The following matrix outlines the recommended remediation actions and timelines:\n"
+        "• Critical (P1): 24 to 48 Hours — Immediate emergency patching and operational containment.\n"
+        "• High (P2): 7 Calendar Days — Rapid engineering cycle remediation with compensating controls.\n"
+        "• Medium (P3): 30 Calendar Days — Scheduled sprint cycle remediation and automated regression verification.\n"
+        "• Low (P4): 90 Calendar Days — Routine maintenance cycle remediation.\n"
+        "• Informational (P5): Advisory / Next Release — Architectural review and defense-in-depth hardening."
+    )
+
+    # =========================================================================
+    # 8. ASSESSMENT SCOPE & TARGET ARCHITECTURE
+    # =========================================================================
+    add_styled_heading(doc, "7. Assessment Scope & Target Architecture", level=1)
+    p_scope = doc.add_paragraph()
+    p_scope.add_run(
+        f"The scope of this assessment was strictly constrained to the authorized target environment and components "
+        f"specified below. Any endpoints, third-party cloud services, or external integrations not explicitly listed "
+        f"were classified as strictly out-of-scope."
+    )
+
+    scope_table = doc.add_table(rows=1, cols=3)
+    scope_table.alignment = WD_TABLE_ALIGNMENT.CENTER
+    sc_headers = ["Boundary Type", "Target Component / Endpoint", "Operational Rules & Constraints"]
+    sc_widths = [Inches(1.4), Inches(2.7), Inches(2.4)]
+
+    for c_idx, title in enumerate(sc_headers):
+        cell = scope_table.rows[0].cells[c_idx]
+        cell.width = sc_widths[c_idx]
+        set_cell_background(cell, HEX_BG_HEADER)
+        set_cell_margins(cell, top=100, bottom=100, left=100, right=100)
+        p = cell.paragraphs[0]
+        r = p.add_run(title)
+        r.font.name = "Calibri"
+        r.font.bold = True
+        r.font.size = Pt(9)
+        r.font.color.rgb = RGBColor(255, 255, 255)
+
+    scope_rows = [
+        ("IN-SCOPE", f"Primary Application URL:\n{proj_meta['target_url']}", "Authorized for manual & automated security testing."),
+        ("IN-SCOPE", "Authentication & Session Endpoints", "Rate-limiting, MFA, and credential handlers."),
+        ("IN-SCOPE", "Application APIs & State Handlers", "Input validation, authorization, and data storage."),
+        ("OUT-OF-SCOPE", "Production Infrastructure & DoS", "Denial of Service (DoS/DDoS) testing strictly prohibited."),
+        ("OUT-OF-SCOPE", "Third-Party Payment Gateways", "External vendor interfaces excluded from intrusive tests."),
+        ("OUT-OF-SCOPE", "Social Engineering & Phishing", "No human-factor testing permitted.")
+    ]
+
+    for idx, (btype, comp, rules) in enumerate(scope_rows):
+        row = scope_table.add_row()
+        vals = [btype, comp, rules]
+        for c_idx, val in enumerate(vals):
+            cell = row.cells[c_idx]
+            cell.width = sc_widths[c_idx]
+            set_cell_margins(cell, top=70, bottom=70, left=80, right=80)
+            if idx % 2 == 1:
+                set_cell_background(cell, HEX_BG_MUTED)
+            p = cell.paragraphs[0]
+            r = p.add_run(val)
+            r.font.name = "Calibri"
+            r.font.size = Pt(8.5)
+            if c_idx == 0:
+                r.font.bold = True
+                r.font.color.rgb = COLOR_LOW if btype == "IN-SCOPE" else COLOR_CRIT
+
+    # Assessment Limitations & Scope Assumptions
+    add_styled_heading(doc, "Assessment Limitations & Scope Assumptions", level=2)
+    p_lim = doc.add_paragraph()
+    p_lim.add_run(
+        "This security assessment reflects the security posture of the target system during the active testing window "
+        "and was conducted strictly within authorized parameters. Testing was performed using non-destructive methodologies "
+        "to prevent system disruption or data loss. Third-party cloud infrastructure, third-party payment gateways, and Denial of "
+        "Service attacks were excluded. The findings documented in this report represent observed control gaps identified "
+        "during the engagement; they do not guarantee the absence of unobserved vulnerabilities."
+    )
+
+    # =========================================================================
+    # 9. TESTING METHODOLOGY & STANDARDS
+    # =========================================================================
+    add_styled_heading(doc, "8. Testing Methodology & Standards", level=1)
+    p_meth = doc.add_paragraph()
+    p_meth.add_run(
+        f"The engagement was executed in strict alignment with the {doc_meta['methodology_name']} framework "
+        f"and NIST SP 800-115 (Technical Guide to Information Security Testing and Assessment).\n\n"
+        f"The testing methodology followed a structured four-phase penetration testing lifecycle:\n"
+        f"1. Planning & Scoping: Rules of engagement definition, scope validation, and asset reconnaissance.\n"
+        f"2. Discovery & Threat Modeling: Automated endpoint discovery, parameter mapping, and security control enumeration.\n"
+        f"3. Attack & Safe Exploitation: Manual vulnerability verification, parameter tampering, injection tests, and privilege validation.\n"
+        f"4. Reporting & Remediation: Risk rating calculation, GRC framework mapping, PoC documentation, and retest planning."
+    )
+
+    # =========================================================================
+    # 10. SECURITY TEST COVERAGE & STATISTICS
+    # =========================================================================
+    add_styled_heading(doc, "9. Security Test Coverage & Statistics", level=1)
+    p_cov = doc.add_paragraph()
+    p_cov.add_run(
+        f"Security test coverage tracks the proportion of planned security verification controls evaluated during the assessment. "
+        f"Out of {metrics['total_tests']} planned security checklist items, {metrics['tested_tests']} were formally evaluated, "
+        f"achieving a security test coverage rating of {metrics['coverage_pct']}%.\n"
+        f"• Verified clean controls: {metrics['clean_tests']}\n"
+        f"• Controls with confirmed vulnerabilities: {metrics['vulnerable_tests']}\n"
+        f"• Controls pending evaluation: {metrics['untested_tests']}"
+    )
+
+    cov_table = doc.add_table(rows=2, cols=6)
+    cov_table.alignment = WD_TABLE_ALIGNMENT.CENTER
+    cov_headers = ["Planned Controls", "Evaluated", "Untested", "Clean Controls", "Confirmed Vulns", "Coverage %"]
+    cov_widths = [Inches(1.1), Inches(1.0), Inches(1.0), Inches(1.1), Inches(1.1), Inches(1.2)]
+
+    for c_idx, title in enumerate(cov_headers):
+        cell = cov_table.rows[0].cells[c_idx]
+        cell.width = cov_widths[c_idx]
+        set_cell_background(cell, HEX_BG_HEADER)
+        set_cell_margins(cell, top=80, bottom=80, left=60, right=60)
+        p = cell.paragraphs[0]
+        r = p.add_run(title)
+        r.font.name = "Calibri"
+        r.font.bold = True
+        r.font.size = Pt(8.5)
+        r.font.color.rgb = RGBColor(255, 255, 255)
+
+    cov_vals = [
+        str(metrics["total_tests"]),
+        str(metrics["tested_tests"]),
+        str(metrics["untested_tests"]),
+        str(metrics["clean_tests"]),
+        str(metrics["vulnerable_tests"]),
+        f"{metrics['coverage_pct']}%"
+    ]
+    for c_idx, val in enumerate(cov_vals):
+        cell = cov_table.rows[1].cells[c_idx]
+        cell.width = cov_widths[c_idx]
+        set_cell_margins(cell, top=80, bottom=80, left=60, right=60)
+        p = cell.paragraphs[0]
+        r = p.add_run(val)
+        r.font.name = "Calibri"
+        r.font.size = Pt(9)
+        r.font.bold = True
+        r.font.color.rgb = COLOR_NAVY
+
+    # List verified clean controls if present
+    chk_list = checklist_items if checklist_items is not None else project.get("checklist", [])
+    clean_items = [c for c in chk_list if c.get("status") == "TESTED_NOT_FOUND"]
+    if clean_items:
+        p_clean = doc.add_paragraph()
+        p_clean.paragraph_format.space_before = Pt(8)
+        p_clean.add_run("Evaluated Controls Verified Clean (No Vulnerabilities Found):").bold = True
+        for ci in clean_items[:15]:
+            p_ci = doc.add_paragraph(style='List Bullet')
+            p_ci.paragraph_format.space_before = Pt(2)
+            p_ci.paragraph_format.space_after = Pt(2)
+            p_ci.add_run(f"{ci.get('name', 'Security Control')}: Baseline defense verified.")
+
+    # =========================================================================
+    # 11. FINDINGS SUMMARY TABLE
+    # =========================================================================
+    doc.add_page_break()
+    add_styled_heading(doc, "10. Findings Summary Table", level=1)
+
+    if not active_findings:
+        p_clean_rep = doc.add_paragraph()
+        p_clean_rep.add_run("Clean Assessment Report (0 vulnerabilities identified)\n").bold = True
+        p_clean_rep.add_run(
+            "No confirmed vulnerabilities were identified across the evaluated test items in the current scope. "
+            "Continuous automated regression testing and periodic re-assessments are recommended."
+        )
+    else:
+        f_table = doc.add_table(rows=1, cols=6)
+        f_table.alignment = WD_TABLE_ALIGNMENT.CENTER
+        ft_headers = ["Finding ID", "Vulnerability Title", "Severity", "CVSS v4.0", "CWE", "Remediation SLA"]
+        ft_widths = [Inches(1.1), Inches(2.2), Inches(0.9), Inches(1.1), Inches(1.0), Inches(1.2)]
+
+        for c_idx, title in enumerate(ft_headers):
+            cell = f_table.rows[0].cells[c_idx]
+            cell.width = ft_widths[c_idx]
+            set_cell_background(cell, HEX_BG_HEADER)
+            set_cell_margins(cell, top=100, bottom=100, left=80, right=80)
+            p = cell.paragraphs[0]
+            r = p.add_run(title)
+            r.font.name = "Calibri"
+            r.font.bold = True
+            r.font.size = Pt(8.5)
+            r.font.color.rgb = RGBColor(255, 255, 255)
+
+        for idx, f in enumerate(active_findings):
+            row = f_table.add_row()
+            sev_col = COLOR_CRIT if f["severity"] == "CRITICAL" else (
+                COLOR_HIGH if f["severity"] == "HIGH" else (
+                    COLOR_MED if f["severity"] == "MEDIUM" else COLOR_LOW
+                )
+            )
+            vals = [
+                f["report_vuln_id"],
+                f["finding_name"],
+                f["severity"],
+                f["cvss_formatted"],
+                f["cwe_id"],
+                f["remediation_sla"]["urgency"]
+            ]
+            for c_idx, val in enumerate(vals):
+                cell = row.cells[c_idx]
+                cell.width = ft_widths[c_idx]
+                set_cell_margins(cell, top=60, bottom=60, left=70, right=70)
+                if idx % 2 == 1:
+                    set_cell_background(cell, HEX_BG_MUTED)
+                p = cell.paragraphs[0]
+                r = p.add_run(val)
+                r.font.name = "Calibri"
+                r.font.size = Pt(8)
+                if c_idx == 0:
+                    r.font.bold = True
+                elif c_idx == 2:
+                    r.font.bold = True
+                    r.font.color.rgb = sev_col
+
+    # =========================================================================
+    # 12. DETAILED TECHNICAL FINDINGS
+    # =========================================================================
+    doc.add_page_break()
+    add_styled_heading(doc, "11. Detailed Technical Findings", level=1)
+
+    if not active_findings:
+        p_no_find = doc.add_paragraph()
+        p_no_find.add_run("No confirmed vulnerability records were selected for detailed analysis in this report.")
+    else:
+        for idx, f in enumerate(active_findings):
+            # Page break between findings
+            if idx > 0:
+                doc.add_page_break()
+
+            # Finding Title Heading
+            add_styled_heading(doc, f"{f['report_vuln_id']}: {f['finding_name']}", level=2)
+
+            # Metadata Table
+            meta_tbl = doc.add_table(rows=4, cols=4)
+            meta_tbl.alignment = WD_TABLE_ALIGNMENT.CENTER
+            m_widths = [Inches(1.2), Inches(2.1), Inches(1.2), Inches(2.0)]
+            meta_rows = [
+                ("Severity Rating", f["severity"], "CVSS v4.0", f["cvss_formatted"]),
+                ("CWE Classification", f"{f['cwe_id']}: {f['cwe_name']}", "Finding Status", f["status"]),
+                ("Affected Component", f["affected_component"], "HTTP Method", f["http_method"]),
+                ("Affected Parameter", f["parameter"], "Assessment Provenance", f["provenance"])
+            ]
+            for r_idx, (l1, v1, l2, v2) in enumerate(meta_rows):
+                row = meta_tbl.rows[r_idx]
+                pairs = [(l1, v1), (l2, v2)]
+                for p_idx, (lbl, val) in enumerate(pairs):
+                    c_lbl = row.cells[p_idx * 2]
+                    c_val = row.cells[p_idx * 2 + 1]
+                    c_lbl.width = m_widths[p_idx * 2]
+                    c_val.width = m_widths[p_idx * 2 + 1]
+
+                    set_cell_background(c_lbl, HEX_BG_MUTED)
+                    set_cell_margins(c_lbl, top=60, bottom=60, left=70, right=70)
+                    set_cell_margins(c_val, top=60, bottom=60, left=70, right=70)
+
+                    p_l = c_lbl.paragraphs[0]
+                    rl = p_l.add_run(lbl)
+                    rl.font.name = "Calibri"
+                    rl.font.bold = True
+                    rl.font.size = Pt(8.5)
+
+                    p_v = c_val.paragraphs[0]
+                    rv = p_v.add_run(val)
+                    rv.font.name = "Calibri"
+                    rv.font.size = Pt(8.5)
+                    if lbl == "Severity Rating":
+                        rv.font.bold = True
+                        rv.font.color.rgb = COLOR_CRIT if v1 == "CRITICAL" else (
+                            COLOR_HIGH if v1 == "HIGH" else (
+                                COLOR_MED if v1 == "MEDIUM" else COLOR_LOW
+                            )
+                        )
+
+            # A. Executive Description
+            add_styled_heading(doc, "A. Executive Description", level=3)
+            p_desc = doc.add_paragraph()
+            p_desc.add_run(f["description"])
+
+            # B. Technical Observation
+            add_styled_heading(doc, "B. Technical Observation", level=3)
+            p_obs = doc.add_paragraph()
+            p_obs.add_run(f["technical_observation"])
+
+            # C. Affected Asset & Component
+            add_styled_heading(doc, "C. Affected Asset & Component", level=3)
+            p_comp = doc.add_paragraph()
+            p_comp.add_run(f"Affected Endpoint / Host: {f['affected_component']}\nHTTP Method: {f['http_method']} | Parameter: {f['parameter']}")
+
+            # D. Security Impact
+            add_styled_heading(doc, "D. Security Impact", level=3)
+            impact_tbl = doc.add_table(rows=2, cols=3)
+            impact_tbl.alignment = WD_TABLE_ALIGNMENT.CENTER
+            imp_widths = [Inches(2.1), Inches(2.2), Inches(2.2)]
+            imp_headers = ["Confidentiality Impact", "Integrity Impact", "Availability Impact"]
+
+            for c_idx, title in enumerate(imp_headers):
+                cell = impact_tbl.rows[0].cells[c_idx]
+                cell.width = imp_widths[c_idx]
+                set_cell_background(cell, HEX_BG_HEADER)
+                set_cell_margins(cell, top=60, bottom=60, left=60, right=60)
+                p = cell.paragraphs[0]
+                r = p.add_run(title)
+                r.font.name = "Calibri"
+                r.font.bold = True
+                r.font.size = Pt(8)
+                r.font.color.rgb = RGBColor(255, 255, 255)
+
+            imp_vals = [f["impact_confidentiality"], f["impact_integrity"], f["impact_availability"]]
+            for c_idx, val in enumerate(imp_vals):
+                cell = impact_tbl.rows[1].cells[c_idx]
+                cell.width = imp_widths[c_idx]
+                set_cell_margins(cell, top=60, bottom=60, left=60, right=60)
+                p = cell.paragraphs[0]
+                r = p.add_run(val)
+                r.font.name = "Calibri"
+                r.font.size = Pt(8.5)
+                r.font.bold = True
+
+            # E. Business Impact
+            add_styled_heading(doc, "E. Business Impact", level=3)
+            p_biz = doc.add_paragraph()
+            p_biz.add_run(f["business_impact"])
+
+            # F. Step-by-Step Reproduction Procedure
+            add_styled_heading(doc, "F. Step-by-Step Reproduction Procedure", level=3)
+            for s_idx, step in enumerate(f["reproduction_steps"]):
+                clean_step = re.sub(r"^\s*(\d+[\.\)]\s*|[-•*]\s*)", "", str(step)).strip()
+                p_step = doc.add_paragraph()
+                p_step.paragraph_format.space_before = Pt(2)
+                p_step.paragraph_format.space_after = Pt(2)
+                r_num = p_step.add_run(f"{s_idx + 1}. ")
+                r_num.font.name = "Calibri"
+                r_num.font.bold = True
+                r_step = p_step.add_run(clean_step)
+                r_step.font.name = "Calibri"
+                r_step.font.size = Pt(9)
+
+            # G. Proof of Concept (PoC) Request / Payload Snippet
+            add_styled_heading(doc, "G. Proof of Concept (PoC) Request / Payload Snippet", level=3)
+            add_monospaced_block(doc, f["poc_text"] or "GET /api/test?payload=test HTTP/1.1\nHost: target.local\n\n[PoC execution verified]")
+
+            if f.get("http_request") or f.get("http_response"):
+                if f.get("http_request"):
+                    p_req_lbl = doc.add_paragraph()
+                    p_req_lbl.add_run("HTTP Request Sample:").bold = True
+                    add_monospaced_block(doc, f["http_request"])
+                if f.get("http_response"):
+                    p_res_lbl = doc.add_paragraph()
+                    p_res_lbl.add_run("HTTP Response Sample:").bold = True
+                    add_monospaced_block(doc, f["http_response"])
+
+            # H. Evidence Artifacts & Captures
+            add_styled_heading(doc, "H. Evidence Artifacts & Captures", level=3)
+            if f.get("evidence_items"):
+                for ev in f["evidence_items"]:
+                    embed_evidence_screenshot(doc, ev)
+            else:
+                p_no_ev = doc.add_paragraph()
+                r_no_ev = p_no_ev.add_run("No graphical screenshot captures attached to this finding.")
+                r_no_ev.font.italic = True
+                r_no_ev.font.color.rgb = COLOR_MUTED
+
+            # I. Root Cause Analysis
+            add_styled_heading(doc, "I. Root Cause Analysis", level=3)
+            p_rc = doc.add_paragraph()
+            p_rc.add_run(f["root_cause"])
+
+            # J. Recommended Technical Remediation
+            add_styled_heading(doc, "J. Recommended Technical Remediation", level=3)
+            p_rem = doc.add_paragraph()
+            p_rem.add_run(f["remediation"])
+
+            # K. Mitigation / Compensating Controls
+            add_styled_heading(doc, "K. Mitigation / Compensating Controls", level=3)
+            p_mit = doc.add_paragraph()
+            p_mit.add_run(f["mitigation"])
+
+            # L. Defense-in-Depth Architectural Hardening & Defense-in-Depth Architectural Mitigation
+            add_styled_heading(doc, "L. Defense-in-Depth Architectural Hardening & Defense-in-Depth Architectural Mitigation", level=3)
+            p_did = doc.add_paragraph()
+            p_did.add_run(f.get("defense_in_depth") or f["mitigation"])
+
+            # M. Detection & Monitoring Guidance
+            add_styled_heading(doc, "M. Detection & Monitoring Guidance", level=3)
+            p_siem = doc.add_paragraph()
+            p_siem.add_run(f["detection_guidance"])
+
+            # N. Developer Validation Guidance
+            add_styled_heading(doc, "N. Developer Validation Guidance", level=3)
+            p_val = doc.add_paragraph()
+            p_val.add_run(f["developer_validation"])
+
+            # O. Retest Status & Verification Lifecycle
+            add_styled_heading(doc, "O. Retest Status & Verification Lifecycle", level=3)
+            p_ret = doc.add_paragraph()
+            p_ret.paragraph_format.space_before = Pt(4)
+            p_ret.add_run(f"Retest Verification Status: ").bold = True
+            r_rst = p_ret.add_run(f["retest_status"])
+            r_rst.font.bold = True
+            if "PASS" in f["retest_status"].upper():
+                r_rst.font.color.rgb = COLOR_LOW
+            elif "FAIL" in f["retest_status"].upper():
+                r_rst.font.color.rgb = COLOR_CRIT
+            else:
+                r_rst.font.color.rgb = COLOR_MUTED
+            p_ret.add_run(f"  |  Notes: {f['retest_notes']}")
+
+            # P. GRC Technical Framework References
+            add_styled_heading(doc, "P. GRC Technical Framework References", level=3)
+            p_grc_f = doc.add_paragraph()
+            g_item = f["grc_mappings"]
+            pci_req_str = g_item['pci'].get('requirement_id', 'N/A')
+            if g_item['pci'].get('applicability') == 'OUT_OF_SCOPE':
+                pci_detail = f"{pci_req_str} (Out of Cardholder Data Environment Scope)"
+            else:
+                pci_detail = f"Requirement {pci_req_str} — {g_item['pci']['title']}"
+            p_grc_f.add_run(
+                f"• NIST CSF 2.0: {g_item['nist']['control_id']} — {g_item['nist']['category']}\n"
+                f"• ISO/IEC 27001:2022: Control {g_item['iso']['control_id']} ({g_item['iso']['title']})\n"
+                f"• AICPA SOC 2 TSC: {g_item['soc2']['criteria_id']} ({g_item['soc2']['principle']})\n"
+                f"• OWASP WSTG v4.2: {g_item['wstg']['test_id']} ({g_item['wstg']['title']})\n"
+                f"• PCI DSS v4.0: {pci_detail}\n"
+                f"• Mapping Review Status: {g_item.get('review_status', 'CONFIRMED')}"
+            )
+
+    # =========================================================================
+    # 13. PRIORITIZED REMEDIATION ACTION PLAN
+    # =========================================================================
+    doc.add_page_break()
+    add_styled_heading(doc, "12. Prioritized Remediation Action Plan", level=1)
+    p_plan = doc.add_paragraph()
+    p_plan.add_run(
+        "To maximize risk reduction and engineering efficiency, remediation efforts must be scheduled in alignment "
+        "with vulnerability severity, exploitability, and organizational risk tolerance."
+    )
+
+    if active_findings:
+        plan_table = doc.add_table(rows=1, cols=5)
+        plan_table.alignment = WD_TABLE_ALIGNMENT.CENTER
+        pl_headers = ["Phase / Priority", "Finding ID", "Vulnerability Title", "Target SLA Window", "Responsible Team"]
+        pl_widths = [Inches(1.2), Inches(1.1), Inches(2.2), Inches(1.2), Inches(0.8)]
+
+        for c_idx, title in enumerate(pl_headers):
+            cell = plan_table.rows[0].cells[c_idx]
+            cell.width = pl_widths[c_idx]
+            set_cell_background(cell, HEX_BG_HEADER)
+            set_cell_margins(cell, top=80, bottom=80, left=70, right=70)
+            p = cell.paragraphs[0]
+            r = p.add_run(title)
+            r.font.name = "Calibri"
+            r.font.bold = True
+            r.font.size = Pt(8.5)
+            r.font.color.rgb = RGBColor(255, 255, 255)
+
+        for idx, f in enumerate(active_findings):
+            row = plan_table.add_row()
+            vals = [
+                f["remediation_sla"]["urgency"],
+                f["report_vuln_id"],
+                f["finding_name"],
+                f["remediation_sla"]["window"],
+                f.get("owner") or proj_meta.get("owner") or "Owner Not Specified"
+            ]
+            for c_idx, val in enumerate(vals):
+                cell = row.cells[c_idx]
+                cell.width = pl_widths[c_idx]
+                set_cell_margins(cell, top=60, bottom=60, left=70, right=70)
+                if idx % 2 == 1:
+                    set_cell_background(cell, HEX_BG_MUTED)
+                p = cell.paragraphs[0]
+                r = p.add_run(val)
+                r.font.name = "Calibri"
+                r.font.size = Pt(8)
+                if c_idx == 0:
+                    r.font.bold = True
+
+    # =========================================================================
+    # 14. RETEST & VALIDATION LIFECYCLE
+    # =========================================================================
+    add_styled_heading(doc, "13. Retest & Validation Lifecycle Register", level=1)
+    p_retest = doc.add_paragraph()
+    p_retest.add_run(
+        "A formal retest verification cycle guarantees that remediation patches have eliminated vulnerability vectors "
+        "without introducing regression flaws."
+    )
+
+    if active_findings:
+        rt_table = doc.add_table(rows=1, cols=4)
+        rt_table.alignment = WD_TABLE_ALIGNMENT.CENTER
+        rt_headers = ["Finding ID", "Vulnerability Title", "Remediation Status", "Retest Verification"]
+        rt_widths = [Inches(1.2), Inches(2.6), Inches(1.3), Inches(1.4)]
+
+        for c_idx, title in enumerate(rt_headers):
+            cell = rt_table.rows[0].cells[c_idx]
+            cell.width = rt_widths[c_idx]
+            set_cell_background(cell, HEX_BG_HEADER)
+            set_cell_margins(cell, top=80, bottom=80, left=80, right=80)
+            p = cell.paragraphs[0]
+            r = p.add_run(title)
+            r.font.name = "Calibri"
+            r.font.bold = True
+            r.font.size = Pt(8.5)
+            r.font.color.rgb = RGBColor(255, 255, 255)
+
+        for idx, f in enumerate(active_findings):
+            row = rt_table.add_row()
+            vals = [
+                f.get("report_vuln_id", "N/A"),
+                f.get("finding_name", "Vulnerability"),
+                f.get("remediation_status") or f.get("fix_status") or "Open",
+                f.get("retest_status", "Pending")
+            ]
+            for c_idx, val in enumerate(vals):
+                cell = row.cells[c_idx]
+                cell.width = rt_widths[c_idx]
+                set_cell_margins(cell, top=60, bottom=60, left=70, right=70)
+                if idx % 2 == 1:
+                    set_cell_background(cell, HEX_BG_MUTED)
+                p = cell.paragraphs[0]
+                r = p.add_run(val)
+                r.font.name = "Calibri"
+                r.font.size = Pt(8)
+                if c_idx == 0:
+                    r.font.bold = True
+                elif c_idx == 3:
+                    r.font.bold = True
+                    if "PASS" in val.upper():
+                        r.font.color.rgb = COLOR_LOW
+                    elif "FAIL" in val.upper():
+                        r.font.color.rgb = COLOR_CRIT
+                    else:
+                        r.font.color.rgb = COLOR_MUTED
+
+    # =========================================================================
+    # 15. GRC / SECURITY FRAMEWORK & CONTROL MAPPINGS
+    # =========================================================================
+    doc.add_page_break()
+    add_styled_heading(doc, "14. GRC / Security Framework & Control Mappings", level=1)
+
+    p_grc_intro = doc.add_paragraph()
+    p_grc_intro.add_run(
+        "This section establishes technical reference mappings between identified assessment findings and authoritative "
+        "Governance, Risk, and Compliance (GRC) frameworks. These mappings enable compliance officers, internal auditors, "
+        "and security leadership to understand how specific vulnerabilities correlate with enterprise control objectives."
+    )
+
+    add_callout_box(
+        doc,
+        MANDATORY_GRC_DISCLAIMER,
+        bg_hex=HEX_BG_WARN,
+        border_color_rgb=COLOR_MED,
+        title="STATUTORY GRC & COMPLIANCE MAPPING DISCLAIMER"
+    )
+
+    # Master GRC Summary Matrix Table
+    add_styled_heading(doc, "Master GRC Framework & Control Mapping Matrix", level=2)
+    if active_findings:
+        grc_tbl = doc.add_table(rows=1, cols=6)
+        grc_tbl.alignment = WD_TABLE_ALIGNMENT.CENTER
+        grc_heads = ["Finding ID", "NIST CSF 2.0", "ISO/IEC 27001", "SOC 2 TSC", "OWASP WSTG", "PCI DSS v4.0"]
+        grc_w = [Inches(1.0), Inches(1.1), Inches(1.1), Inches(1.1), Inches(1.1), Inches(1.1)]
+
+        for c_idx, title in enumerate(grc_heads):
+            cell = grc_tbl.rows[0].cells[c_idx]
+            cell.width = grc_w[c_idx]
+            set_cell_background(cell, HEX_BG_HEADER)
+            set_cell_margins(cell, top=80, bottom=80, left=60, right=60)
+            p = cell.paragraphs[0]
+            r = p.add_run(title)
+            r.font.name = "Calibri"
+            r.font.bold = True
+            r.font.size = Pt(8)
+            r.font.color.rgb = RGBColor(255, 255, 255)
+
+        for idx, f in enumerate(active_findings):
+            row = grc_tbl.add_row()
+            g = f["grc_mappings"]
+            vals = [
+                f["report_vuln_id"],
+                g["nist"]["control_id"],
+                g["iso"]["control_id"],
+                g["soc2"]["criteria_id"],
+                g["wstg"]["test_id"],
+                g["pci"]["requirement_id"]
+            ]
+            for c_idx, val in enumerate(vals):
+                cell = row.cells[c_idx]
+                cell.width = grc_w[c_idx]
+                set_cell_margins(cell, top=60, bottom=60, left=60, right=60)
+                if idx % 2 == 1:
+                    set_cell_background(cell, HEX_BG_MUTED)
+                p = cell.paragraphs[0]
+                r = p.add_run(val)
+                r.font.name = "Calibri"
+                r.font.size = Pt(8)
+                if c_idx == 0:
+                    r.font.bold = True
+
+    # Framework Specific Detailed Breakdown
+    add_styled_heading(doc, "Framework Breakdown & Control Details", level=2)
+    p_fb = doc.add_paragraph()
+    p_fb.add_run(
+        "• NIST Cybersecurity Framework (CSF 2.0): Organizes controls across Govern, Identify, Protect, Detect, Respond, and Recover functions.\n"
+        "• ISO/IEC 27001:2022 (Annex A): Information security technological and organizational controls.\n"
+        "• AICPA SOC 2 Trust Services Criteria: Common Criteria (CC6 Logical Access, CC7 Operations, CC8 Change Management).\n"
+        "• OWASP Web Security Testing Guide (WSTG v4.2): Test case procedure definitions.\n"
+        "• PCI DSS v4.0: Applicable requirements for cardholder data environments and secure software engineering."
+    )
+
+    # =========================================================================
+    # 16. OBSERVED SECURITY CONTROL GAPS SUMMARY
+    # =========================================================================
+    add_styled_heading(doc, "15. Observed Security Control Gaps Summary", level=1)
+    p_cg_intro = doc.add_paragraph()
+    p_cg_intro.add_run(
+        "To provide engineering leadership and CISOs with systemic insight, findings are aggregated into security control "
+        "domains to highlight root defensive posture weaknesses across the architecture."
+    )
+
+    if control_gaps:
+        gap_tbl = doc.add_table(rows=1, cols=4)
+        gap_tbl.alignment = WD_TABLE_ALIGNMENT.CENTER
+        gap_heads = ["Security Domain", "Impacted Findings", "Highest Severity", "Primary Observed Control Gap"]
+        gap_w = [Inches(1.8), Inches(1.2), Inches(1.1), Inches(2.4)]
+
+        for c_idx, title in enumerate(gap_heads):
+            cell = gap_tbl.rows[0].cells[c_idx]
+            cell.width = gap_w[c_idx]
+            set_cell_background(cell, HEX_BG_HEADER)
+            set_cell_margins(cell, top=80, bottom=80, left=70, right=70)
+            p = cell.paragraphs[0]
+            r = p.add_run(title)
+            r.font.name = "Calibri"
+            r.font.bold = True
+            r.font.size = Pt(8.5)
+            r.font.color.rgb = RGBColor(255, 255, 255)
+
+        for idx, gap in enumerate(control_gaps):
+            row = gap_tbl.add_row()
+            vals = [
+                gap["domain"],
+                ", ".join(gap["finding_ids"]),
+                gap["max_severity"],
+                gap["control_gap"]
+            ]
+            for c_idx, val in enumerate(vals):
+                cell = row.cells[c_idx]
+                cell.width = gap_w[c_idx]
+                set_cell_margins(cell, top=60, bottom=60, left=70, right=70)
+                if idx % 2 == 1:
+                    set_cell_background(cell, HEX_BG_MUTED)
+                p = cell.paragraphs[0]
+                r = p.add_run(val)
+                r.font.name = "Calibri"
+                r.font.size = Pt(8)
+                if c_idx == 0:
+                    r.font.bold = True
+                elif c_idx == 2:
+                    r.font.bold = True
+                    r.font.color.rgb = COLOR_CRIT if val == "CRITICAL" else (
+                        COLOR_HIGH if val == "HIGH" else COLOR_MED
+                    )
+    else:
+        p_no_gaps = doc.add_paragraph()
+        p_no_gaps.add_run("No systemic control gaps were observed in the evaluated environment.")
+
+    # =========================================================================
+    # 17. ASSESSMENT CONCLUSION & FORMAL SIGN-OFF
+    # =========================================================================
+    doc.add_page_break()
+    add_styled_heading(doc, "16. Assessment Conclusion & Formal Sign-Off", level=1)
+    p_concl = doc.add_paragraph()
+
+    if metrics["total_findings"] > 0:
+        p_concl.add_run(
+            f"The cybersecurity assessment against '{proj_meta['name']}' identified {metrics['total_findings']} "
+            f"confirmed findings within the tested scope ({metrics['critical_count']} Critical, {metrics['high_count']} High, "
+            f"{metrics['medium_count']} Medium, {metrics['low_count']} Low, {metrics['info_count']} Informational). "
+            f"Remediation must be executed according to the recommended priority targets, followed by "
+            f"a formal retest verification cycle to confirm that vulnerability vectors have been eliminated."
+        )
+    elif metrics["total_tests"] > 0 and metrics["tested_tests"] >= metrics["total_tests"]:
+        p_concl.add_run(
+            f"The assessment evaluated {metrics['tested_tests']} designated security controls with zero confirmed "
+            f"vulnerabilities identified in the tested scope. Continued regression auditing, automated pipeline scanning, "
+            f"and dependency monitoring are recommended to sustain a clean security posture."
+        )
+    else:
+        p_concl.add_run(
+            f"No confirmed vulnerabilities were identified in this report; however, planned test controls have not "
+            f"been fully evaluated ({metrics['tested_tests']} of {metrics['total_tests']} tested). "
+            f"Continued testing is recommended prior to formal production certification."
+        )
+    p_concl.paragraph_format.space_after = Pt(20)
+
+    # Formal Sign-off Signature Block
+    sign_table = doc.add_table(rows=3, cols=2)
+    sign_table.alignment = WD_TABLE_ALIGNMENT.CENTER
+    s_cells = sign_table.rows[0].cells
+    s_cells[0].width = Inches(3.2)
+    s_cells[1].width = Inches(3.3)
+    p_s1 = s_cells[0].paragraphs[0]
+    p_s1.add_run("Prepared & Assessed by:").bold = True
+    p_s2 = s_cells[1].paragraphs[0]
+    p_s2.add_run("Verified & Reviewed by:").bold = True
+
+    r2_cells = sign_table.rows[1].cells
+    r2_cells[0].paragraphs[0].add_run(f"\n___________________________________\n{doc_meta['author_name']}\nLead Penetration Tester, Tracegate VAPT")
+    r2_cells[1].paragraphs[0].add_run(f"\n___________________________________\n{doc_meta['reviewer_name']}\nSenior Security Consultant / CISO Reviewer")
+
+    r3_cells = sign_table.rows[2].cells
+    r3_cells[0].paragraphs[0].add_run(f"Date: {doc_meta['generation_date']}")
+    r3_cells[1].paragraphs[0].add_run(f"Date: {doc_meta['generation_date']}")
+
+    # =========================================================================
+    # 18. APPENDICES (A THROUGH F)
+    # =========================================================================
+    doc.add_page_break()
+
+    # Appendix A: Complete Findings Register
+    add_styled_heading(doc, "Appendix A: Complete Findings Register", level=1)
+    if active_findings:
+        p_app_a = doc.add_paragraph()
+        for f in active_findings:
+            p_app_a.add_run(f"• [{f['report_vuln_id']}] {f['finding_name']} — Severity: {f['severity']} | CWE: {f['cwe_id']} | Status: {f['status']}\n")
+    else:
+        p_app_a = doc.add_paragraph()
+        p_app_a.add_run("No confirmed vulnerabilities in findings register.")
+
+    # Appendix B: Evidence Index / Register
+    add_styled_heading(doc, "Appendix B: Evidence Index & Figure Register", level=1)
+    if figures_index:
+        ev_tbl = doc.add_table(rows=1, cols=4)
+        ev_tbl.alignment = WD_TABLE_ALIGNMENT.CENTER
+        ev_h = ["Figure #", "Associated Finding ID", "Evidence Filename", "Description / Caption"]
+        ev_w = [Inches(1.0), Inches(1.3), Inches(1.8), Inches(2.4)]
+
+        for c_idx, title in enumerate(ev_h):
+            cell = ev_tbl.rows[0].cells[c_idx]
+            cell.width = ev_w[c_idx]
+            set_cell_background(cell, HEX_BG_HEADER)
+            set_cell_margins(cell, top=80, bottom=80, left=60, right=60)
+            p = cell.paragraphs[0]
+            r = p.add_run(title)
+            r.font.name = "Calibri"
+            r.font.bold = True
+            r.font.size = Pt(8.5)
+            r.font.color.rgb = RGBColor(255, 255, 255)
+
+        for idx, fig in enumerate(figures_index):
+            row = ev_tbl.add_row()
+            vals = [
+                fig["figure_label"],
+                fig["finding_id"],
+                fig["filename"],
+                fig["caption"]
+            ]
+            for c_idx, val in enumerate(vals):
+                cell = row.cells[c_idx]
+                cell.width = ev_w[c_idx]
+                set_cell_margins(cell, top=60, bottom=60, left=60, right=60)
+                if idx % 2 == 1:
+                    set_cell_background(cell, HEX_BG_MUTED)
+                p = cell.paragraphs[0]
+                r = p.add_run(val)
+                r.font.name = "Calibri"
+                r.font.size = Pt(8)
+                if c_idx == 0:
+                    r.font.bold = True
+    else:
+        p_no_figs = doc.add_paragraph()
+        p_no_figs.add_run("No graphical screenshot evidence registered in this assessment.")
+
+    # Appendix C: CWE Classification Index
+    add_styled_heading(doc, "Appendix C: CWE Classification Index", level=1)
+    p_cwe = doc.add_paragraph()
+    cwe_index_text = (
+        "• CWE-89: Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')\n"
+        "• CWE-79: Improper Neutralization of Input During Web Page Generation ('Cross-site Scripting')\n"
+        "• CWE-639: Authorization Bypass Through User-Controlled Key ('Insecure Direct Object References')\n"
+        "• CWE-287: Improper Authentication\n"
+        "• CWE-288: Authentication Bypass Using an Alternate Path or Channel\n"
+        "• CWE-22: Improper Limitation of a Pathname to a Restricted Directory ('Path Traversal')\n"
+        "• CWE-434: Unrestricted Upload of File with Dangerous Type\n"
+        "• CWE-524: Use of Cache-Containing Sensitive Information\n"
+        "• CWE-204: Observable Response Discrepancy ('Account Enumeration')\n"
+        "• CWE-307: Improper Restriction of Excessive Authentication Attempts\n"
+        "• CWE-384: Session Fixation\n"
+        "• CWE-352: Cross-Site Request Forgery (CSRF)\n"
+        "• CWE-200: Exposure of Sensitive Information to an Unauthorized Actor\n"
+        "• CWE-269: Improper Privilege Management\n"
+        "• CWE-798: Use of Hard-coded Credentials"
+    )
+    p_cwe.add_run(cwe_index_text)
+
+    # Appendix D: GRC Framework References & Methodology Standards
+    add_styled_heading(doc, "Appendix D: GRC Framework References & Methodology Standards", level=1)
+    p_app_d = doc.add_paragraph()
+    p_app_d.add_run(
+        "• NIST CSF 2.0: National Institute of Standards and Technology Cybersecurity Framework 2.0 (2024)\n"
+        "• ISO/IEC 27001:2022: Information Security Management Systems — Annex A Technological & Organizational Controls\n"
+        "• AICPA SOC 2: Trust Services Criteria for Security, Availability, Processing Integrity, Confidentiality, and Privacy\n"
+        "• OWASP WSTG v4.2: Open Web Application Security Project Web Security Testing Guide\n"
+        "• PCI DSS v4.0: Payment Card Industry Data Security Standard Requirements and Security Assessment Procedures"
+    )
+
+    # Appendix E: Retest & Remediation Verification Summary
+    add_styled_heading(doc, "Appendix E: Retest & Remediation Verification Summary", level=1)
+    p_app_e = doc.add_paragraph()
+    p_app_e.add_run(
+        f"Retest Cycle Status Summary:\n"
+        f"• Total Findings Tracked: {metrics['total_findings']}\n"
+        f"• Findings with Verified PASS: {sum(1 for f in active_findings if 'PASS' in f['retest_status'].upper())}\n"
+        f"• Findings Pending Retest: {sum(1 for f in active_findings if 'PENDING' in f['retest_status'].upper())}\n"
+        f"• Findings with Retest FAIL: {sum(1 for f in active_findings if 'FAIL' in f['retest_status'].upper())}"
+    )
+
+    # Appendix F: Report Traceability & Generation Metadata
+    add_styled_heading(doc, "Appendix F: Report Traceability & Audit Metadata", level=1)
+    p_meta = doc.add_paragraph()
+    meta_text = (
+        f"• Project ID: {proj_meta['id']}\n"
+        f"• Target System Name: {proj_meta['name']}\n"
+        f"• Report Version: {doc_meta['version']}\n"
+        f"• Selected Finding IDs: {', '.join([f['report_vuln_id'] for f in active_findings]) or 'None'}\n"
+        f"• Generation Engine: Tracegate Enterprise Report Engine v2.0 (Dual DOCX & PDF)\n"
+        f"• Generation Timestamp: {doc_meta['generation_timestamp']}\n"
+        f"• Report Classification: {doc_meta['classification']}"
+    )
+    p_meta.add_run(meta_text)
+
+    # Save to disk
+    clean_version = doc_meta["version"].replace(".", "_")
+    filename = f"{proj_meta['id']}_{clean_version}_assessment_report.docx"
+    output_path = REPORTS_DIR / filename
+    doc.save(str(output_path))
+    logger.info(f"Enterprise DOCX Report created at: {output_path}")
+
+    # Automatically convert to PDF
+    try:
+        convert_docx_to_pdf(str(output_path))
+    except Exception as e:
+        logger.warning(f"Automatic PDF compilation skipped: {e}")
+
+    return str(output_path)
