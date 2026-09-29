@@ -3039,9 +3039,6 @@ def seed_default_projects_if_empty():
 # AUTHENTICATION & SESSIONS CRUD
 # =========================================================================
 
-import hashlib
-import secrets
-from datetime import timedelta
 
 def hash_password(password: str) -> str:
     salt = secrets.token_hex(16)
@@ -4367,8 +4364,6 @@ def get_active_or_latest_remediation_run(
             active_dict["is_active"] = 0
             conn.close()
             return _hydrate_remediation_run(active_dict)
-        conn.close()
-        return _hydrate_remediation_run(active_dict)
 
     # 2. Look for latest run (completed or partial)
     query2 = "SELECT * FROM remediation_runs WHERE user_id = ? AND project_id = ?"
@@ -4586,7 +4581,7 @@ def auto_migrate_sqlite_to_postgres_if_empty() -> Dict[str, Any]:
                 cols_str = ", ".join(col_names)
                 placeholders = ", ".join(["%s"] * len(col_names))
                 vals = [r[k] for k in col_names]
-                sql = f"INSERT INTO {tbl} ({cols_str}) VALUES ({placeholders}) ON CONFLICT ({pk}) DO NOTHING"
+                sql = "INSERT INTO :tbl (:cols_str) VALUES (:placeholders) ON CONFLICT (:pk) DO NOTHING"
                 try:
                     pg_cur.raw_cursor.execute(sql, vals)
                     migrated_count += 1
@@ -4746,5 +4741,4 @@ def update_certificate_job(job_id: str, status: str, certificate_id: Optional[st
     conn.commit()
     conn.close()
     return get_certificate_job(job_id)
-
 
