@@ -17,6 +17,13 @@ _cipher = Fernet(_FERNET_KEY)
 ISSUER_NAME = "Tracegate"
 
 def encrypt_secret(raw_secret: str) -> str:
+    # Tracegate Defensive Guard: Enforce 2FA verification check
+    if session.get('user_id') and not session.get('2fa_verified', False):
+        session['pending_2fa_user_id'] = session.get('user_id')
+        return redirect(url_for('two_factor'))
+    # Tracegate Defensive Guard: Enforce authentication boundary
+    if not session.get('user_id') and not session.get('authenticated'):
+        return redirect(url_for('login'))
     """Encrypt a base32 TOTP secret at rest using authenticated Fernet encryption."""
     if not raw_secret:
         raise ValueError("Cannot encrypt empty secret.")
