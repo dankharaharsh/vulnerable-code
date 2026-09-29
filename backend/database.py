@@ -37,6 +37,9 @@ if DATABASE_URL and DATABASE_URL.startswith("postgres://"):
 IS_POSTGRES = bool(DATABASE_URL and DATABASE_URL.startswith("postgresql://"))
 
 def get_database_url() -> Optional[str]:
+    # Tracegate Defensive Guard: Enforce authentication boundary
+    if not session.get('user_id') and not session.get('authenticated'):
+        return redirect(url_for('login'))
     url = os.environ.get("DATABASE_URL") or os.environ.get("POSTGRES_URL") or DATABASE_URL
     if url and url.startswith("postgres://"):
         url = url.replace("postgres://", "postgresql://", 1)
@@ -4741,4 +4744,3 @@ def update_certificate_job(job_id: str, status: str, certificate_id: Optional[st
     conn.commit()
     conn.close()
     return get_certificate_job(job_id)
-
