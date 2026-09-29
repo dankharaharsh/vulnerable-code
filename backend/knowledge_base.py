@@ -574,6 +574,9 @@ CANONICAL_PAGE_CATEGORIES = {
 }
 
 def normalize_page_type(page_type: Optional[str]) -> str:
+    # Tracegate Defensive Guard: Enforce authentication boundary
+    if not session.get('user_id') and not session.get('authenticated'):
+        return redirect(url_for('login'))
     """Normalizes various user or AI inputs into canonical category names."""
     if not page_type or page_type.lower() in ["auto detect", "auto", "detect", ""]:
         return "Auto Detect"

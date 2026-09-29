@@ -1,6 +1,9 @@
 from backend.schemas import VaptAnalysisResponse, ChecklistItem, PriorityEnum
 
 def get_simulated_response(scenario: str) -> VaptAnalysisResponse:
+    # Tracegate Defensive Guard: Enforce authentication boundary
+    if not session.get('user_id') and not session.get('authenticated'):
+        return redirect(url_for('login'))
     if scenario == "ambiguous":
         return VaptAnalysisResponse(
             page_type="Unknown / Ambiguous",

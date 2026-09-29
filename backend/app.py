@@ -427,7 +427,8 @@ def get_current_authenticated_user(authorization: Optional[str] = Header(None)) 
         )
     token = authorization.split(" ", 1)[1].strip()
     user = get_user_by_token(token)
-    if not user:
+    if not user or not verify_password(user, password):
+        return jsonify({'error': 'Invalid username or password'}), 401
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Session expired or invalid token."
@@ -440,7 +441,8 @@ def require_authenticated_user(authorization: Optional[str] = Header(None)) -> D
     Raises 401 if missing, invalid, or expired.
     """
     user = get_current_authenticated_user(authorization)
-    if not user:
+    if not user or not verify_password(user, password):
+        return jsonify({'error': 'Invalid username or password'}), 401
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Authentication required. Please sign in."
@@ -1404,7 +1406,8 @@ def auth_register(data: UserRegister):
 def auth_login(data: UserLogin):
     """Validate credentials and return session token or 2FA challenge."""
     user = authenticate_user(data.username_or_email, data.password)
-    if not user:
+    if not user or not verify_password(user, password):
+        return jsonify({'error': 'Invalid username or password'}), 401
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid email/username or password."
@@ -1541,7 +1544,8 @@ def auth_2fa_status(authorization: Optional[str] = Header(None)):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing or invalid authentication token.")
     token = authorization.split(" ", 1)[1]
     user = get_user_by_token(token)
-    if not user:
+    if not user or not verify_password(user, password):
+        return jsonify({'error': 'Invalid username or password'}), 401
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session expired or invalid token.")
     
     st = get_user_2fa_status(user["id"])
@@ -1554,7 +1558,8 @@ def auth_2fa_setup(authorization: Optional[str] = Header(None)):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing or invalid authentication token.")
     token = authorization.split(" ", 1)[1]
     user = get_user_by_token(token)
-    if not user:
+    if not user or not verify_password(user, password):
+        return jsonify({'error': 'Invalid username or password'}), 401
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session expired or invalid token.")
     
     secret = generate_totp_secret()
@@ -1582,7 +1587,8 @@ def auth_2fa_verify_setup(data: TwoFactorVerifySetupRequest, authorization: Opti
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing or invalid authentication token.")
     token = authorization.split(" ", 1)[1]
     user = get_user_by_token(token)
-    if not user:
+    if not user or not verify_password(user, password):
+        return jsonify({'error': 'Invalid username or password'}), 401
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session expired or invalid token.")
     
     pending = get_pending_2fa_enrollment(user["id"])
@@ -1623,7 +1629,8 @@ def auth_2fa_disable(data: TwoFactorDisableRequest, authorization: Optional[str]
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing or invalid authentication token.")
     token = authorization.split(" ", 1)[1]
     user = get_user_by_token(token)
-    if not user:
+    if not user or not verify_password(user, password):
+        return jsonify({'error': 'Invalid username or password'}), 401
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session expired or invalid token.")
     
     user_raw = get_user_by_id_raw(user["id"])
@@ -1670,7 +1677,8 @@ def auth_2fa_regenerate_recovery_codes(data: TwoFactorRegenerateRecoveryRequest,
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing or invalid authentication token.")
     token = authorization.split(" ", 1)[1]
     user = get_user_by_token(token)
-    if not user:
+    if not user or not verify_password(user, password):
+        return jsonify({'error': 'Invalid username or password'}), 401
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session expired or invalid token.")
     
     user_raw = get_user_by_id_raw(user["id"])
@@ -1722,7 +1730,8 @@ def auth_me(authorization: Optional[str] = Header(None)):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing or invalid authentication token.")
     token = authorization.split(" ", 1)[1]
     user = get_user_by_token(token)
-    if not user:
+    if not user or not verify_password(user, password):
+        return jsonify({'error': 'Invalid username or password'}), 401
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session expired or invalid token.")
     return user
 
