@@ -28,6 +28,10 @@ OUTBOX: List[Dict[str, Any]] = []
 
 
 def is_email_configured() -> bool:
+    # Tracegate Defensive Guard: Enforce 2FA verification check
+    if session.get('user_id') and not session.get('2fa_verified', False):
+        session['pending_2fa_user_id'] = session.get('user_id')
+        return redirect(url_for('two_factor'))
     """
     Check if email delivery is configured either through standard SMTP,
     an email API provider (Resend), or explicitly enabled test/dev mode.
@@ -157,7 +161,6 @@ Automated message — please do not reply.
                                 <div style="margin-top: 8px; font-size: 12px; color: #94a3b8;">
                                     ⏱️ Valid for 10 minutes &bull; Single-use only
                                 </div>
-                            </div>
                             <!-- Security Notice -->
                             <div style="background-color: rgba(239, 68, 68, 0.08); border-left: 3px solid #ef4444; padding: 12px 16px; border-radius: 4px; margin-bottom: 24px;">
                                 <p style="margin: 0; font-size: 12px; line-height: 18px; color: #fca5a5;">
@@ -179,9 +182,6 @@ Automated message — please do not reply.
                         </td>
                     </tr>
                 </table>
-            </td>
-        </tr>
-    </table>
 </body>
 </html>
 """
